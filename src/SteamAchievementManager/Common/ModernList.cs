@@ -151,29 +151,35 @@ internal sealed class ModernList : ListView
 
     protected override void OnDrawItem(DrawListViewItemEventArgs e)
     {
-        var g = e.Graphics;
-        var row = e.Bounds with { X = 0, Width = ClientSize.Width };
+        // painted in OnDrawSubItem instead: Windows draws its own selection/hover highlight after this
+        // stage, which would cover the row with a translucent overlay
+    }
+
+    protected override void OnDrawSubItem(DrawListViewSubItemEventArgs e)
+    {
+        if (e.ColumnIndex == 0) PaintRowAt(e.Graphics, e.Bounds, e.ItemIndex, e.Item.Selected);
+    }
+
+    private void PaintRowAt(Graphics g, Rectangle bounds, int index, bool isSelected)
+    {
+        var row = bounds with { X = 0, Width = ClientSize.Width };
         using (SolidBrush back = new(Theme.Background))
         {
             g.FillRectangle(back, row);
         }
 
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        var index = e.ItemIndex;
-        var isSelected = e.Item.Selected;
         var isHot = index == _hotIndex;
 
         var card = CardBounds(row);
         RectangleF shape = new(card.X + 0.5f, card.Y + 0.5f, card.Width - 1, card.Height - 1);
         var radius = LogicalToDeviceUnits(6);
-        Theme.FillRounded(g, isSelected ? Theme.SurfaceSelected : isHot ? Theme.SurfaceHover : Theme.Surface, shape,
-            radius);
-        Theme.DrawRounded(g, isSelected ? Theme.Blend(Theme.SurfaceSelected, Theme.Accent, 0.35f) : Theme.Border,
-            shape, radius);
+        Theme.FillRounded(g, isSelected || isHot ? Theme.SurfaceHover : Theme.Surface, shape, radius);
+        Theme.DrawRounded(g, Theme.Border, shape, radius);
 
         if (isSelected)
         {
-            // the WinUI selection pill on the left edge
+            // a small accent bar marks the keyboard selection; ticking is done with the checkboxes
             var pillHeight = card.Height * 0.4f;
             Theme.FillRounded(g, Theme.Accent,
                 new RectangleF(card.X + LogicalToDeviceUnits(3), card.Y + (card.Height - pillHeight) / 2,
@@ -202,10 +208,6 @@ internal sealed class ModernList : ListView
         }
     }
 
-    protected override void OnDrawSubItem(DrawListViewSubItemEventArgs e)
-    {
-        // the whole row is painted in OnDrawItem
-    }
 
     protected override void OnDrawColumnHeader(DrawListViewColumnHeaderEventArgs e)
     {
