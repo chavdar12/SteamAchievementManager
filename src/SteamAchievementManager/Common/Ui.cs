@@ -106,7 +106,6 @@ internal static class Ui
         {
             Dock = DockStyle.Top;
             BackColor = Theme.Background;
-            Height = owner.LogicalToDeviceUnits(78);
 
             var left = owner.LogicalToDeviceUnits(22);
             Title = new Label
@@ -128,6 +127,7 @@ internal static class Ui
                 Size = new Size(owner.LogicalToDeviceUnits(280), owner.LogicalToDeviceUnits(4))
             };
             Controls.AddRange([Title, Subtitle, Progress]);
+            Height = owner.LogicalToDeviceUnits(78); // after the labels exist: resizing lays them out
         }
 
         public Label Title { get; }

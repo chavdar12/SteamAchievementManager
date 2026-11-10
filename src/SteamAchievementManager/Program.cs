@@ -12,12 +12,44 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        var silent = args.Length > 1 && args[1] is "--unlock-all" or "--lock-all";
+        Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
+        Application.ThreadException += (_, e) => Crash(e.Exception, silent);
+        AppDomain.CurrentDomain.UnhandledException += (_, e) => Crash(e.ExceptionObject as Exception, silent);
+        try
+        {
+            return Run(args, silent);
+        }
+        catch (Exception e)
+        {
+            Crash(e, silent);
+            return 1;
+        }
+    }
+
+    // shows (or, when silent, prints) the error and exits, instead of the app vanishing without a trace
+    private static void Crash(Exception e, bool silent)
+    {
+        var report = $"Steam Achievement Manager crashed:\n\n{e}";
+        try
+        {
+            File.WriteAllText(Path.Combine(Path.GetTempPath(), "SteamAchievementManager-crash.txt"), report);
+        }
+        catch (IOException)
+        {
+        }
+
+        Fail(report + "\n\n(Saved to %TEMP%\\SteamAchievementManager-crash.txt)", silent);
+        Environment.Exit(1);
+    }
+
+    private static int Run(string[] args, bool setAll)
+    {
         ApplicationConfiguration.Initialize();
 #pragma warning disable WFO5001 // dark mode is still marked experimental in WinForms
         Application.SetColorMode(SystemColorMode.System); // follow the Windows light/dark setting
 #pragma warning restore WFO5001
 
-        var setAll = args.Length > 1 && args[1] is "--unlock-all" or "--lock-all";
         uint appId = 0;
         if (args.Length > 0 &&
             uint.TryParse(args[0], NumberStyles.None, CultureInfo.InvariantCulture, out appId) == false)
