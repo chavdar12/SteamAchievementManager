@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
     <PropertyGroup>
-        <AssemblyTitle>Steam Achievement Manager</AssemblyTitle>
+        <Product>Steam Achievement Manager</Product>
         <Description>A manager for game achievements in Steam.</Description>
         <Company>Gibbed</Company>
         <Authors>Gibbed</Authors>
@@ -13,13 +13,10 @@
         <OutputType>WinExe</OutputType>
         <TargetFramework>net10.0-windows</TargetFramework>
         <UseWindowsForms>true</UseWindowsForms>
+        <ImplicitUsings>enable</ImplicitUsings>
         <EnableWindowsTargeting>true</EnableWindowsTargeting>
-        <ApplicationHighDpiMode>SystemAware</ApplicationHighDpiMode>
-        <RootNamespace>SAM</RootNamespace>
-        <AssemblyName>SteamAchievementManager</AssemblyName>
-        <ApplicationIcon>SAM.ico</ApplicationIcon>
-        <ApplicationManifest>app.manifest</ApplicationManifest>
-        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+        <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+        <ApplicationIcon>Assets\app.ico</ApplicationIcon>
     </PropertyGroup>
     <PropertyGroup>
         <!-- 32-bit: Steam's steamclient.dll is loaded in-process -->
@@ -30,14 +27,7 @@
         <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     </PropertyGroup>
     <ItemGroup>
-        <EmbeddedResource Update="**\Resources.resx">
-            <Generator>ResXFileCodeGenerator</Generator>
-            <LastGenOutput>Resources.Designer.cs</LastGenOutput>
-        </EmbeddedResource>
-        <Compile Update="**\Resources.Designer.cs">
-            <AutoGen>True</AutoGen>
-            <DependentUpon>Resources.resx</DependentUpon>
-            <DesignTime>True</DesignTime>
-        </Compile>
+        <!-- loaded by file name through Common/Assets.cs -->
+        <EmbeddedResource Include="Assets\*" LogicalName="%(Filename)%(Extension)"/>
     </ItemGroup>
 </Project>

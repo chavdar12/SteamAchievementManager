@@ -27,11 +27,22 @@ dotnet publish src/SteamAchievementManager -c Release -o publish
 
 This produces a single `publish/SteamAchievementManager.exe`.
 
+Run the tests (any OS; they cover the schema parser and stat editing) with:
+
+```
+dotnet test tests/SteamAchievementManager.Tests
+```
+
 Project layout (`src/SteamAchievementManager/`):
-- `API/`: wrappers around Steam's native `steamclient.dll`.
+- `Program.cs`: entry point. With no arguments it opens the game picker; with an app ID it opens the manager for that game (`--unlock-all` unlocks everything and exits). It runs Steam callbacks on a UI timer.
+- `Steam/`: interop with Steam's native `steamclient.dll` (loading, the client connection and callbacks, and the apps and user-stats interfaces). The app is 32-bit because it loads Steam's 32-bit `steamclient.dll`.
+- `Schema/`: reads a game's achievement and stat definitions from Steam's binary KeyValues cache.
 - `Picker/`: the game list window.
-- `Game/`: the per-game achievement and statistics manager.
-- `Program.cs`: entry point; with no arguments it opens the picker, with an app ID it opens the manager for that game. It is 32-bit because it loads Steam's 32-bit `steamclient.dll`. Every push to `master` builds it and publishes a GitHub release.
+- `Manager/`: the per-game achievement and statistics window.
+- `Common/`: shared UI pieces (embedded images, dialogs, image downloads, list view).
+- `Assets/`: the app icon and toolbar images, embedded into the executable.
+
+Every push to `master` builds it and publishes a GitHub release.
 
 ## History
 
@@ -42,5 +53,5 @@ SAM was originally a closed-source application released in 2008 by Rick (gibbed)
 
 ## License and attribution
 
-- Original code © Rick (gibbed), released under the [zlib License](LICENSE.txt). This fork keeps that license and its notices unchanged; modifications in this fork are released under the same license.
+- Original code © Rick (gibbed), released under the [zlib License](LICENSE.txt). This fork keeps that license and its notice in [LICENSE.txt](LICENSE.txt); modifications in this fork are released under the same license.
 - Most (if not all) icons are from the [Fugue Icons](https://p.yusukekamiyamane.com/) set by Yusuke Kamiyamane, licensed under [Creative Commons Attribution 3.0](https://creativecommons.org/licenses/by/3.0/).

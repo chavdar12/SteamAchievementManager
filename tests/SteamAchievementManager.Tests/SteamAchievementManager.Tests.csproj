@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <!-- plain net10.0, so the tests run on any OS without the 32-bit WinForms app -->
+        <TargetFramework>net10.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <IsPackable>false</IsPackable>
+    </PropertyGroup>
+    <ItemGroup>
+        <!-- the UI-free sources under test -->
+        <Compile Include="..\..\src\SteamAchievementManager\Schema\*.cs" Link="Source\%(Filename)%(Extension)"/>
+        <Compile Include="..\..\src\SteamAchievementManager\Manager\StatInfo.cs" Link="Source\StatInfo.cs"/>
+        <Compile Include="..\..\src\SteamAchievementManager\Steam\SteamLibrary.cs" Link="Source\SteamLibrary.cs"/>
+        <Compile Include="..\..\src\SteamAchievementManager\Steam\Callbacks.cs" Link="Source\Callbacks.cs"/>
+    </ItemGroup>
+    <ItemGroup>
+        <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1"/>
+        <PackageReference Include="xunit" Version="2.9.3"/>
+        <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4"/>
+    </ItemGroup>
+    <ItemGroup>
+        <Using Include="Xunit"/>
+    </ItemGroup>
+</Project>

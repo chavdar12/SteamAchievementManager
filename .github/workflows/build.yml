@@ -29,6 +29,9 @@ jobs:
             echo "VERSION=7.0.${GITHUB_RUN_NUMBER}" >> "$GITHUB_ENV"
           fi
 
+      - name: Test
+        run: dotnet test tests/SteamAchievementManager.Tests -c Release
+
       - name: Build
         run: dotnet publish src/SteamAchievementManager -c Release -p:Version=${{ env.VERSION }} -p:FileVersion=${{ env.VERSION }} -p:DebugType=none -o publish
 

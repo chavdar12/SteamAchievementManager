@@ -1,30 +1,10 @@
-﻿/* Copyright (c) 2024 Rick (rick 'at' gibbed 'dot' us)
- *
- * This software is provided 'as-is', without any express or implied
- * warranty. In no event will the authors be held liable for any damages
- * arising from the use of this software.
- *
- * Permission is granted to anyone to use this software for any purpose,
- * including commercial applications, and to alter it and redistribute it
- * freely, subject to the following restrictions:
- *
- * 1. The origin of this software must not be misrepresented; you must not
- *    claim that you wrote the original software. If you use this software
- *    in a product, an acknowledgment in the product documentation would
- *    be appreciated but is not required.
- *
- * 2. Altered source versions must be plainly marked as such, and must not
- *    be misrepresented as being the original software.
- *
- * 3. This notice may not be removed or altered from any source
- *    distribution.
- */
-
-using System;
 using System.Globalization;
-using System.Windows.Forms;
+using SteamAchievementManager.Common;
+using SteamAchievementManager.Manager;
+using SteamAchievementManager.Picker;
+using SteamAchievementManager.Steam;
 
-namespace SAM;
+namespace SteamAchievementManager;
 
 internal static class Program
 {
@@ -33,64 +13,53 @@ internal static class Program
     private static int Main(string[] args)
     {
         ApplicationConfiguration.Initialize();
+#pragma warning disable WFO5001 // dark mode is still marked experimental in WinForms
+        Application.SetColorMode(SystemColorMode.System); // follow the Windows light/dark setting
+#pragma warning restore WFO5001
 
-        long appId = 0;
-        var unlockAll = args.Length > 1 && args[1] == "--unlock-all";
+        uint appId = 0;
         if (args.Length > 0 &&
-            long.TryParse(args[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out appId) == false)
-        {
-            ShowError("Could not parse application ID from command line argument.");
-            return 1;
-        }
+            uint.TryParse(args[0], NumberStyles.None, CultureInfo.InvariantCulture, out appId) == false)
+            return Fail("Could not parse application ID from command line argument.");
+        var unlockAll = args.Length > 1 && args[1] == "--unlock-all";
 
-        if (API.Steam.GetInstallPath() == Application.StartupPath)
-        {
-            ShowError("This tool declines to being run from the Steam directory.");
-            return 1;
-        }
+        if (SteamLibrary.InstallPath == Application.StartupPath)
+            return Fail("This tool declines to being run from the Steam directory.");
 
-        using API.Client client = new();
-        if (InitializeClient(client, appId) == false) return 1;
-
-        if (appId == 0)
-        {
-            Application.Run(new Picker.GamePicker(client));
-            return 0;
-        }
-
-        Game.Manager manager = new(appId, client, unlockAll);
-        Application.Run(manager);
-        return unlockAll == true && manager.UnlockAllSucceeded == false ? 1 : 0;
-    }
-
-    private static bool InitializeClient(API.Client client, long appId)
-    {
+        SteamClient steam;
         try
         {
-            client.Initialize(appId);
-            return true;
+            steam = new SteamClient(appId);
         }
-        catch (API.ClientInitializeException e)
+        catch (ClientInitializeException e)
         {
             var message = "Steam is not running. Please start Steam then run this tool again.";
-            if (appId != 0 && e.Failure == API.ClientInitializeFailure.ConnectToGlobalUser)
+            if (appId != 0 && e.Failure == ClientInitializeFailure.ConnectToGlobalUser)
                 message += "\n\nIf you have the game through Family Share, the game may be locked due to\n" +
                            "the Family Share account actively playing a game.";
-
-            if (string.IsNullOrEmpty(e.Message) == false) message += "\n\n(" + e.Message + ")";
-
-            ShowError(message);
-            return false;
+            return Fail(message + "\n\n(" + e.Message + ")");
         }
-        catch (DllNotFoundException)
+
+        using (steam)
+        using (var callbackTimer = new System.Windows.Forms.Timer { Interval = 100, Enabled = true })
         {
-            ShowError("You've caused an exceptional error!");
-            return false;
+            callbackTimer.Tick += (_, _) => steam.RunCallbacks();
+
+            if (appId == 0)
+            {
+                Application.Run(new GamePicker(steam));
+                return 0;
+            }
+
+            AchievementManager manager = new(appId, steam, unlockAll);
+            Application.Run(manager);
+            return unlockAll && manager.UnlockAllSucceeded == false ? 1 : 0;
         }
     }
 
-    private static void ShowError(string message)
+    private static int Fail(string message)
     {
-        MessageBox.Show(message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        Dialogs.Error(null, message);
+        return 1;
     }
 }
