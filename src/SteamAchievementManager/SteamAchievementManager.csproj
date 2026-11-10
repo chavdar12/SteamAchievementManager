@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <AssemblyTitle>Steam Achievement Manager</AssemblyTitle>
+        <Description>A manager for game achievements in Steam.</Description>
+        <Company>Gibbed</Company>
+        <Authors>Gibbed</Authors>
+        <Copyright>Copyright © Gibbed 2019</Copyright>
+        <Version>7.0.0</Version>
+        <RepositoryUrl>https://github.com/chavdar12/SteamAchievementManager/</RepositoryUrl>
+        <RepositoryType>Git</RepositoryType>
+    </PropertyGroup>
+    <PropertyGroup>
+        <OutputType>WinExe</OutputType>
+        <TargetFramework>net10.0-windows</TargetFramework>
+        <UseWindowsForms>true</UseWindowsForms>
+        <EnableWindowsTargeting>true</EnableWindowsTargeting>
+        <ApplicationHighDpiMode>SystemAware</ApplicationHighDpiMode>
+        <RootNamespace>SAM</RootNamespace>
+        <AssemblyName>SteamAchievementManager</AssemblyName>
+        <ApplicationIcon>SAM.ico</ApplicationIcon>
+        <ApplicationManifest>app.manifest</ApplicationManifest>
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    </PropertyGroup>
+    <PropertyGroup>
+        <!-- 32-bit: Steam's steamclient.dll is loaded in-process -->
+        <RuntimeIdentifier>win-x86</RuntimeIdentifier>
+        <SelfContained>true</SelfContained>
+        <PublishSingleFile>true</PublishSingleFile>
+        <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+        <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    </PropertyGroup>
+    <ItemGroup>
+        <EmbeddedResource Update="**\Resources.resx">
+            <Generator>ResXFileCodeGenerator</Generator>
+            <LastGenOutput>Resources.Designer.cs</LastGenOutput>
+        </EmbeddedResource>
+        <Compile Update="**\Resources.Designer.cs">
+            <AutoGen>True</AutoGen>
+            <DependentUpon>Resources.resx</DependentUpon>
+            <DesignTime>True</DesignTime>
+        </Compile>
+    </ItemGroup>
+</Project>

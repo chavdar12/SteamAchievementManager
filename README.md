@@ -10,19 +10,28 @@ Steam Achievement Manager (SAM) is a lightweight, portable application used to m
 
 ## Changes in this fork
 
+- A single app: the game picker and the per-game manager are one `SteamAchievementManager.exe` (self-contained, no .NET install needed).
+- Targets .NET 10 instead of .NET Framework 4.8.
 - The game picker shows games as a list instead of tiles.
-- Multiple games can be selected (Ctrl/Shift+click or **Select All**) and opened together: pressing Enter or double-clicking launches one manager window per selected game.
+- Multiple games can be selected (Ctrl/Shift+click or **Select All**) and opened together: pressing Enter or double-clicking opens one manager window per selected game.
+- **Unlock All Achievements** unlocks every achievement in all selected games in one click. Games are processed one at a time in the background; protected achievements are skipped. Can also be run from the command line: `SteamAchievementManager.exe <appid> --unlock-all`.
 - Builds and releases are produced by GitHub Actions.
 
 ## Building
 
-Requires Visual Studio 2019+ (or MSBuild) with .NET Framework 4.8 targeting:
+Requires the .NET 10 SDK:
 
 ```
-msbuild SAM.sln -restore -p:Configuration=Release -p:Platform=x86
+dotnet publish src/SteamAchievementManager -c Release -o publish
 ```
 
-Output goes to `upload/`. Pushing a tag like `v7.1.0` builds the project and publishes a GitHub release with the zipped binaries.
+This produces a single `publish/SteamAchievementManager.exe`.
+
+Project layout (`src/SteamAchievementManager/`):
+- `API/`: wrappers around Steam's native `steamclient.dll`.
+- `Picker/`: the game list window.
+- `Game/`: the per-game achievement and statistics manager.
+- `Program.cs`: entry point; with no arguments it opens the picker, with an app ID it opens the manager for that game. It is 32-bit because it loads Steam's 32-bit `steamclient.dll`. Every push to `master` builds it and publishes a GitHub release.
 
 ## History
 

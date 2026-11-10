@@ -16,7 +16,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: microsoft/setup-msbuild@v2
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
 
       - name: Set version
         shell: bash
@@ -28,13 +30,13 @@ jobs:
           fi
 
       - name: Build
-        run: msbuild SAM.sln -restore -m -p:Configuration=Release -p:Platform=x86 -p:Version=${{ env.VERSION }} -p:FileVersion=${{ env.VERSION }}
+        run: dotnet publish src/SteamAchievementManager -c Release -p:Version=${{ env.VERSION }} -p:FileVersion=${{ env.VERSION }} -p:DebugType=none -o publish
 
       - name: Package
         shell: pwsh
         run: |
-          Copy-Item LICENSE.txt, README.md upload/
-          Compress-Archive -Path upload/*.exe, upload/*.dll, upload/LICENSE.txt, upload/README.md -DestinationPath "SteamAchievementManager-$env:VERSION.zip"
+          Copy-Item LICENSE.txt, README.md publish/
+          Compress-Archive -Path publish/SteamAchievementManager.exe, publish/LICENSE.txt, publish/README.md -DestinationPath "SteamAchievementManager-$env:VERSION.zip"
 
       - uses: actions/upload-artifact@v4
         with:
