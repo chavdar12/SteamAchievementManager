@@ -13,7 +13,9 @@ internal sealed class NativeInterface(IntPtr self)
     // the `this` pointer, passed as the first argument of every (thiscall) method
     public IntPtr Self { get; } = self;
 
-    public T Function<T>(int slot) where T : Delegate =>
-        (T)_functions.GetOrAdd(slot, s =>
+    public T Function<T>(int slot) where T : Delegate
+    {
+        return (T)_functions.GetOrAdd(slot, s =>
             Marshal.GetDelegateForFunctionPointer<T>(Marshal.ReadIntPtr(_vtable, s * IntPtr.Size)));
+    }
 }

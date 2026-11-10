@@ -23,7 +23,10 @@ internal sealed class KeyValue
 
     private readonly List<KeyValue> _children = [];
 
-    private KeyValue(object value) => Value = value;
+    private KeyValue(object value)
+    {
+        Value = value;
+    }
 
     public string Name { get; private init; }
 
@@ -36,34 +39,46 @@ internal sealed class KeyValue
     public KeyValue this[string key] =>
         _children.FirstOrDefault(c => string.Equals(c.Name, key, StringComparison.OrdinalIgnoreCase)) ?? Missing;
 
-    public string AsString(string defaultValue) => Value?.ToString() ?? defaultValue;
-
-    public int AsInteger(int defaultValue) => Value switch
+    public string AsString(string defaultValue)
     {
-        string s => int.TryParse(s, out var v) ? v : defaultValue,
-        int i => i,
-        float f => (int)f,
-        ulong u => (int)(u & 0xFFFFFFFF),
-        _ => defaultValue
-    };
+        return Value?.ToString() ?? defaultValue;
+    }
 
-    public float AsFloat(float defaultValue) => Value switch
+    public int AsInteger(int defaultValue)
     {
-        string s => float.TryParse(s, out var v) ? v : defaultValue,
-        int i => i,
-        float f => f,
-        ulong u => u & 0xFFFFFFFF,
-        _ => defaultValue
-    };
+        return Value switch
+        {
+            string s => int.TryParse(s, out var v) ? v : defaultValue,
+            int i => i,
+            float f => (int)f,
+            ulong u => (int)(u & 0xFFFFFFFF),
+            _ => defaultValue
+        };
+    }
 
-    public bool AsBoolean(bool defaultValue) => Value switch
+    public float AsFloat(float defaultValue)
     {
-        string s => int.TryParse(s, out var v) ? v != 0 : defaultValue,
-        int i => i != 0,
-        float f => (int)f != 0,
-        ulong u => u != 0,
-        _ => defaultValue
-    };
+        return Value switch
+        {
+            string s => float.TryParse(s, out var v) ? v : defaultValue,
+            int i => i,
+            float f => f,
+            ulong u => u & 0xFFFFFFFF,
+            _ => defaultValue
+        };
+    }
+
+    public bool AsBoolean(bool defaultValue)
+    {
+        return Value switch
+        {
+            string s => int.TryParse(s, out var v) ? v != 0 : defaultValue,
+            int i => i != 0,
+            float f => (int)f != 0,
+            ulong u => u != 0,
+            _ => defaultValue
+        };
+    }
 
     // null if the file is missing, unreadable or malformed
     public static KeyValue Load(string path)

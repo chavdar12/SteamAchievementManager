@@ -6,7 +6,10 @@ namespace SteamAchievementManager.Common;
 // (items tagged "primary") and an accent underline for checked toggle buttons
 internal sealed class ModernRenderer() : ToolStripProfessionalRenderer(new ModernColors())
 {
-    public static bool IsPrimary(ToolStripItem item) => item.Tag is "primary";
+    private static bool IsPrimary(ToolStripItem item)
+    {
+        return item.Tag is "primary";
+    }
 
     protected override void OnRenderToolStripBackground(ToolStripRenderEventArgs e)
     {
@@ -35,11 +38,15 @@ internal sealed class ModernRenderer() : ToolStripProfessionalRenderer(new Moder
         e.Graphics.DrawLine(pen, 0, y, bounds.Right, y);
     }
 
-    protected override void OnRenderButtonBackground(ToolStripItemRenderEventArgs e) =>
+    protected override void OnRenderButtonBackground(ToolStripItemRenderEventArgs e)
+    {
         DrawItemBackground(e.Graphics, e.Item, e.Item is ToolStripButton { Checked: true });
+    }
 
-    protected override void OnRenderDropDownButtonBackground(ToolStripItemRenderEventArgs e) =>
+    protected override void OnRenderDropDownButtonBackground(ToolStripItemRenderEventArgs e)
+    {
         DrawItemBackground(e.Graphics, e.Item, false);
+    }
 
     private static void DrawItemBackground(Graphics g, ToolStripItem item, bool isChecked)
     {
@@ -105,7 +112,10 @@ internal sealed class ModernRenderer() : ToolStripProfessionalRenderer(new Moder
 
     private sealed class ModernColors : ProfessionalColorTable
     {
-        public ModernColors() => UseSystemColors = false;
+        public ModernColors()
+        {
+            UseSystemColors = false;
+        }
 
         public override Color ToolStripDropDownBackground => Theme.Surface;
         public override Color ImageMarginGradientBegin => Theme.Surface;

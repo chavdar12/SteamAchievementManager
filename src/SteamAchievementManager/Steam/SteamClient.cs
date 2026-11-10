@@ -10,7 +10,8 @@ internal enum ClientInitializeFailure
     CreateSteamClient,
     CreateSteamPipe,
     ConnectToGlobalUser,
-    AppIdMismatch
+    AppIdMismatch,
+    GetInterface
 }
 
 [UnmanagedFunctionPointer(CallingConvention.ThisCall)]
@@ -98,8 +99,10 @@ internal sealed class SteamClient : IDisposable
     public SteamApps Apps { get; }
     public SteamUserStats UserStats { get; }
 
-    public void OnCallback<T>(Action<T> handler) where T : struct, ICallback =>
+    public void OnCallback<T>(Action<T> handler) where T : struct, ICallback
+    {
         _callbacks.Add((T.Id, param => handler(Marshal.PtrToStructure<T>(param))));
+    }
 
     // dispatches pending callbacks to the registered handlers; called from a UI timer
     public void RunCallbacks()
@@ -110,12 +113,17 @@ internal sealed class SteamClient : IDisposable
         try
         {
             while (SteamLibrary.GetCallback(_pipe, out var message))
-            {
-                foreach (var (id, handler) in _callbacks)
-                    if (id == message.Id)
-                        handler(message.Param);
-                SteamLibrary.FreeLastCallback(_pipe);
-            }
+                try
+                {
+                    foreach (var (id, handler) in _callbacks)
+                        if (id == message.Id)
+                            handler(message.Param);
+                }
+                finally
+                {
+                    // a throwing handler must not leave the callback queued, or it would be delivered forever
+                    SteamLibrary.FreeLastCallback(_pipe);
+                }
         }
         finally
         {
@@ -132,11 +140,23 @@ internal sealed class SteamClient : IDisposable
         _user = _pipe = 0;
     }
 
-    private IntPtr GetUserInterface(int slot, string version) =>
-        _client.Function<GetUserInterfaceFn>(slot)(_client.Self, _user, _pipe, version);
+    // a null interface would crash natively when its vtable is read
+    private IntPtr Require(IntPtr address, string version)
+    {
+        return address != IntPtr.Zero
+            ? address
+            : throw Fail(ClientInitializeFailure.GetInterface, $"Steam doesn't provide {version}");
+    }
 
-    private IntPtr GetPipeInterface(int slot, string version) =>
-        _client.Function<GetPipeInterfaceFn>(slot)(_client.Self, _pipe, version);
+    private IntPtr GetUserInterface(int slot, string version)
+    {
+        return Require(_client.Function<GetUserInterfaceFn>(slot)(_client.Self, _user, _pipe, version), version);
+    }
+
+    private IntPtr GetPipeInterface(int slot, string version)
+    {
+        return Require(_client.Function<GetPipeInterfaceFn>(slot)(_client.Self, _pipe, version), version);
+    }
 
     private ClientInitializeException Fail(ClientInitializeFailure failure, string message)
     {

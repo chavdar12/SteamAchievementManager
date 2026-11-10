@@ -3,16 +3,19 @@ namespace SteamAchievementManager.Common;
 // factories for the shared toolbar, status bar and header pieces
 internal static class Ui
 {
-    public static ToolStrip Toolbar(Control owner) => new()
+    public static ToolStrip Toolbar(Control owner)
     {
-        Renderer = new ModernRenderer(),
-        GripStyle = ToolStripGripStyle.Hidden,
-        Padding = new Padding(owner.LogicalToDeviceUnits(10), owner.LogicalToDeviceUnits(8),
-            owner.LogicalToDeviceUnits(10), owner.LogicalToDeviceUnits(8)),
-        ImageScalingSize = new Size(owner.LogicalToDeviceUnits(16), owner.LogicalToDeviceUnits(16)),
-        BackColor = Theme.Background,
-        ForeColor = Theme.Text
-    };
+        return new ToolStrip
+        {
+            Renderer = new ModernRenderer(),
+            GripStyle = ToolStripGripStyle.Hidden,
+            Padding = new Padding(owner.LogicalToDeviceUnits(10), owner.LogicalToDeviceUnits(8),
+                owner.LogicalToDeviceUnits(10), owner.LogicalToDeviceUnits(8)),
+            ImageScalingSize = new Size(owner.LogicalToDeviceUnits(16), owner.LogicalToDeviceUnits(16)),
+            BackColor = Theme.Background,
+            ForeColor = Theme.Text
+        };
+    }
 
     public static ToolStripButton Button(Control owner, string text, char glyph, EventHandler click,
         string toolTip = null, bool primary = false, bool iconOnly = false)
@@ -65,17 +68,23 @@ internal static class Ui
         return box;
     }
 
-    public static ToolStripLabel Icon(Control owner, char glyph) => new()
+    public static ToolStripLabel Icon(Control owner, char glyph)
     {
-        Image = Glyphs.Image(glyph, owner.LogicalToDeviceUnits(16), Theme.SubtleText),
-        DisplayStyle = ToolStripItemDisplayStyle.Image,
-        Margin = new Padding(owner.LogicalToDeviceUnits(4), 0, 0, 0)
-    };
+        return new ToolStripLabel
+        {
+            Image = Glyphs.Image(glyph, owner.LogicalToDeviceUnits(16), Theme.SubtleText),
+            DisplayStyle = ToolStripItemDisplayStyle.Image,
+            Margin = new Padding(owner.LogicalToDeviceUnits(4), 0, 0, 0)
+        };
+    }
 
-    public static ToolStripSeparator Separator(Control owner) => new()
+    public static ToolStripSeparator Separator(Control owner)
     {
-        Margin = new Padding(owner.LogicalToDeviceUnits(4), 0, owner.LogicalToDeviceUnits(4), 0)
-    };
+        return new ToolStripSeparator
+        {
+            Margin = new Padding(owner.LogicalToDeviceUnits(4), 0, owner.LogicalToDeviceUnits(4), 0)
+        };
+    }
 
     public static StatusStrip StatusBar(Control owner, params ToolStripItem[] items)
     {
@@ -92,12 +101,15 @@ internal static class Ui
         return status;
     }
 
-    public static ToolStripStatusLabel StatusLabel(bool spring) => new()
+    public static ToolStripStatusLabel StatusLabel(bool spring)
     {
-        Spring = spring,
-        TextAlign = ContentAlignment.MiddleLeft,
-        ForeColor = Theme.SubtleText
-    };
+        return new ToolStripStatusLabel
+        {
+            Spring = spring,
+            TextAlign = ContentAlignment.MiddleLeft,
+            ForeColor = Theme.SubtleText
+        };
+    }
 
     // a title with a subtitle under it and an optional progress line, docked at the top
     public sealed class Header : Panel

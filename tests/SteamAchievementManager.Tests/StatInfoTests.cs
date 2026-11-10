@@ -6,8 +6,10 @@ namespace SteamAchievementManager.Tests;
 
 public class StatInfoTests
 {
-    private static StatInfo Stat(object value, bool isFloat = false, int permission = 0, bool incrementOnly = false) =>
-        new(new StatDefinition("ID", "Name", isFloat, incrementOnly, permission), value);
+    private static StatInfo Stat(object value, bool isFloat = false, int permission = 0, bool incrementOnly = false)
+    {
+        return new StatInfo(new StatDefinition("ID", "Name", isFloat, incrementOnly, permission), value);
+    }
 
     [Fact]
     public void ParsesEditedTextAndTracksChanges()
@@ -27,7 +29,7 @@ public class StatInfoTests
     public void ParsesFloatsInTheCurrentCulture()
     {
         CultureInfo.CurrentCulture = CultureInfo.InvariantCulture;
-        var stat = Stat(1.5f, isFloat: true);
+        var stat = Stat(1.5f, true);
         stat.Value = "2.25";
         Assert.Equal(2.25f, stat.Value);
     }

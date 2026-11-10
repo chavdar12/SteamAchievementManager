@@ -4,7 +4,10 @@ namespace SteamAchievementManager.Tests;
 
 public class KeyValueTests
 {
-    private static KeyValue Load(KeyValueWriter writer) => KeyValue.Load(writer.Save());
+    private static KeyValue Load(KeyValueWriter writer)
+    {
+        return KeyValue.Load(writer.Save());
+    }
 
     [Fact]
     public void ReadsNestedValuesOfEveryType()

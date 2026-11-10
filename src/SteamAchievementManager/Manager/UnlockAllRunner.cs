@@ -13,6 +13,7 @@ internal static class UnlockAllRunner
         string error = null;
         var unlocked = 0;
         var isDone = false;
+        var isReceived = false;
 
         void Finish(string failure)
         {
@@ -24,6 +25,10 @@ internal static class UnlockAllRunner
 
         steam.OnCallback<UserStatsReceived>(param =>
         {
+            // Steam may resend stats after the store; acting on them again would store twice
+            if (isReceived) return;
+            isReceived = true;
+
             if (param.Result != 1)
             {
                 Finish(param.Result == 2
@@ -57,7 +62,7 @@ internal static class UnlockAllRunner
 
             if (unlocked == 0)
                 Finish(null);
-            else if (steam.UserStats.StoreStats() == false)
+            else if (!steam.UserStats.StoreStats())
                 Finish("Steam refused to save the changes");
             // otherwise finish in UserStatsStored, so exiting does not cut off the store
         });

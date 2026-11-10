@@ -29,23 +29,29 @@ internal static class Theme
     public static Color Danger => Pick(0xC42B1C, 0xFF99A4);
 
     // background and icon color of an info bar
-    public static (Color Back, Color Icon) For(Severity severity) => severity switch
+    public static (Color Back, Color Icon) For(Severity severity)
     {
-        Severity.Success => (Pick(0xDFF6DD, 0x393D1B), Success),
-        Severity.Warning => (Pick(0xFFF4CE, 0x433519), Warning),
-        Severity.Error => (Pick(0xFDE7E9, 0x442726), Danger),
-        _ => (Pick(0xE6F2FB, 0x1F2D3A), Accent)
-    };
+        return severity switch
+        {
+            Severity.Success => (Pick(0xDFF6DD, 0x393D1B), Success),
+            Severity.Warning => (Pick(0xFFF4CE, 0x433519), Warning),
+            Severity.Error => (Pick(0xFDE7E9, 0x442726), Danger),
+            _ => (Pick(0xE6F2FB, 0x1F2D3A), Accent)
+        };
+    }
 
     public static Font TitleFont { get; } = new("Segoe UI Semibold", 15f);
     public static Font RowTitleFont { get; } = new("Segoe UI Semibold", 10f);
     public static Font SmallFont { get; } = new("Segoe UI", 8.25f);
     public static Font SmallBoldFont { get; } = new("Segoe UI Semibold", 8.25f);
 
-    public static Color Blend(Color color, Color over, float amount) => Color.FromArgb(
-        (int)(color.R + (over.R - color.R) * amount),
-        (int)(color.G + (over.G - color.G) * amount),
-        (int)(color.B + (over.B - color.B) * amount));
+    public static Color Blend(Color color, Color over, float amount)
+    {
+        return Color.FromArgb(
+            (int)(color.R + (over.R - color.R) * amount),
+            (int)(color.G + (over.G - color.G) * amount),
+            (int)(color.B + (over.B - color.B) * amount));
+    }
 
     public static GraphicsPath RoundedRect(RectangleF r, float radius)
     {
@@ -91,5 +97,8 @@ internal static class Theme
         g.Restore(state);
     }
 
-    private static Color Pick(int light, int dark) => Color.FromArgb(255, Color.FromArgb(IsDark ? dark : light));
+    private static Color Pick(int light, int dark)
+    {
+        return Color.FromArgb(255, Color.FromArgb(IsDark ? dark : light));
+    }
 }

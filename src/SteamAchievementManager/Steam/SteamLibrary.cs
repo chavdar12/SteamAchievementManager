@@ -26,7 +26,7 @@ internal static class SteamLibrary
     private static FreeLastCallbackFn _freeLastCallback;
 
     public static string InstallPath =>
-        (string)Registry.GetValue(@"HKEY_LOCAL_MACHINE\Software\Valve\Steam", "InstallPath", null);
+        Registry.GetValue(@"HKEY_LOCAL_MACHINE\Software\Valve\Steam", "InstallPath", null) as string;
 
     public static bool Load()
     {
@@ -48,14 +48,25 @@ internal static class SteamLibrary
         return true;
     }
 
-    public static IntPtr CreateInterface(string version) => _createInterface(version, IntPtr.Zero);
+    public static IntPtr CreateInterface(string version)
+    {
+        return _createInterface(version, IntPtr.Zero);
+    }
 
-    public static bool GetCallback(int pipe, out CallbackMessage message) => _getCallback(pipe, out message, out _);
+    public static bool GetCallback(int pipe, out CallbackMessage message)
+    {
+        return _getCallback(pipe, out message, out _);
+    }
 
-    public static void FreeLastCallback(int pipe) => _freeLastCallback(pipe);
+    public static void FreeLastCallback(int pipe)
+    {
+        _freeLastCallback(pipe);
+    }
 
-    private static T GetExport<T>(IntPtr module, string name) where T : Delegate =>
-        NativeLibrary.TryGetExport(module, name, out var address)
+    private static T GetExport<T>(IntPtr module, string name) where T : Delegate
+    {
+        return NativeLibrary.TryGetExport(module, name, out var address)
             ? Marshal.GetDelegateForFunctionPointer<T>(address)
             : null;
+    }
 }

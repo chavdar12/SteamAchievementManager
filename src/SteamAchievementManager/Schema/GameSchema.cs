@@ -44,9 +44,12 @@ internal sealed class GameSchema
     public List<StatDefinition> Stats { get; } = [];
 
     // null if the schema is missing or invalid; names are localized to the given language
-    public static GameSchema Load(uint appId, string language) =>
-        Load(Path.Combine(SteamLibrary.InstallPath ?? "", "appcache", "stats", $"UserGameStatsSchema_{appId}.bin"),
+    public static GameSchema Load(uint appId, string language)
+    {
+        return Load(
+            Path.Combine(SteamLibrary.InstallPath ?? "", "appcache", "stats", $"UserGameStatsSchema_{appId}.bin"),
             appId, language);
+    }
 
     public static GameSchema Load(string path, uint appId, string language)
     {

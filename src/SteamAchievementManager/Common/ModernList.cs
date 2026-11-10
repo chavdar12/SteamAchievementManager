@@ -20,6 +20,8 @@ internal sealed class ModernList : ListView
     private const int WmPaint = 0x000F;
     private const int WmLButtonDown = 0x0201;
     private const int WmLButtonDblClk = 0x0203;
+    private const int WmMouseWheel = 0x020A;
+    private const int WmVScroll = 0x0115;
 
     private int _hotIndex = -1;
     private string _emptyText;
@@ -80,11 +82,17 @@ internal sealed class ModernList : ListView
     public Func<int, Point, bool> RowClick { get; set; }
 
     // the area passed to PaintRow as RowPaintEventArgs.Bounds
-    public Rectangle ContentBounds(int index) => ContentBounds(GetItemRect(index));
+    public Rectangle ContentBounds(int index)
+    {
+        return ContentBounds(GetItemRect(index));
+    }
 
-    private Rectangle ContentBounds(Rectangle row) => Rectangle.FromLTRB(
-        CheckBoxBounds(row).Right + LogicalToDeviceUnits(14), CardBounds(row).Top,
-        CardBounds(row).Right - LogicalToDeviceUnits(14), CardBounds(row).Bottom);
+    private Rectangle ContentBounds(Rectangle row)
+    {
+        return Rectangle.FromLTRB(
+            CheckBoxBounds(row).Right + LogicalToDeviceUnits(14), CardBounds(row).Top,
+            CardBounds(row).Right - LogicalToDeviceUnits(14), CardBounds(row).Bottom);
+    }
 
     public void SetCount(int count)
     {
@@ -127,9 +135,12 @@ internal sealed class ModernList : ListView
         if (Columns.Count > 0 && Columns[0].Width != ClientSize.Width) Columns[0].Width = ClientSize.Width;
     }
 
-    private Rectangle CardBounds(Rectangle row) => Rectangle.FromLTRB(
-        row.Left + LogicalToDeviceUnits(12), row.Top + LogicalToDeviceUnits(2),
-        ClientSize.Width - LogicalToDeviceUnits(12), row.Bottom - LogicalToDeviceUnits(2));
+    private Rectangle CardBounds(Rectangle row)
+    {
+        return Rectangle.FromLTRB(
+            row.Left + LogicalToDeviceUnits(12), row.Top + LogicalToDeviceUnits(2),
+            ClientSize.Width - LogicalToDeviceUnits(12), row.Bottom - LogicalToDeviceUnits(2));
+    }
 
     private Rectangle CheckBoxBounds(Rectangle row)
     {
@@ -142,7 +153,10 @@ internal sealed class ModernList : ListView
     {
         var g = e.Graphics;
         var row = e.Bounds with { X = 0, Width = ClientSize.Width };
-        using (SolidBrush back = new(Theme.Background)) g.FillRectangle(back, row);
+        using (SolidBrush back = new(Theme.Background))
+        {
+            g.FillRectangle(back, row);
+        }
 
         g.SmoothingMode = SmoothingMode.AntiAlias;
         var index = e.ItemIndex;
@@ -193,7 +207,10 @@ internal sealed class ModernList : ListView
         // the whole row is painted in OnDrawItem
     }
 
-    protected override void OnDrawColumnHeader(DrawListViewColumnHeaderEventArgs e) => e.DrawDefault = true;
+    protected override void OnDrawColumnHeader(DrawListViewColumnHeaderEventArgs e)
+    {
+        e.DrawDefault = true;
+    }
 
     protected override void OnMouseMove(MouseEventArgs e)
     {
@@ -276,6 +293,13 @@ internal sealed class ModernList : ListView
         }
 
         base.WndProc(ref m);
+
+        // scrolling moves rows under a still mouse, so the hovered row has to be recomputed
+        if (m.Msg is WmMouseWheel or WmVScroll)
+        {
+            var mouse = PointToClient(Cursor.Position);
+            SetHot(Count > 0 && ClientRectangle.Contains(mouse) ? GetItemAt(mouse.X, mouse.Y)?.Index ?? -1 : -1);
+        }
 
         if (m.Msg == WmPaint && Count == 0 && string.IsNullOrEmpty(_emptyText) == false)
         {

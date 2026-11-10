@@ -59,7 +59,7 @@ public class GameSchemaTests
             .End()
             .End()
             .End()
-            .End(), language: "german");
+            .End(), "german");
 
         var win = Assert.Single(schema.Achievements);
         Assert.Equal("WIN", win.Id);

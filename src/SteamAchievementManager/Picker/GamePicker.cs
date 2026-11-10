@@ -72,7 +72,7 @@ internal sealed class GamePicker : Form
         };
 
         _unlockButton = Ui.Button(this, "Unlock all achievements", Glyphs.Unlock, OnUnlockAllClicked,
-            "Unlock every achievement in the ticked games", primary: true);
+            "Unlock every achievement in the ticked games", true);
         _openButton = Ui.Button(this, "Open", Glyphs.Open, OnOpenClicked, "Manage the ticked games one by one");
         _refreshButton = Ui.Button(this, "Refresh", Glyphs.Refresh, (_, _) => LoadGames(),
             "Reload the game list (F5)", iconOnly: true);
@@ -93,7 +93,7 @@ internal sealed class GamePicker : Form
 
         _list.Dock = DockStyle.Fill;
         _list.RowHeight = LogicalToDeviceUnits(76);
-        _list.IsChecked = i => _filteredGames[i].Checked;
+        _list.IsChecked = i => i < _filteredGames.Count && _filteredGames[i].Checked;
         _list.ToggleRequested += OnToggleGames;
         _list.RowClick = OnRowClick;
         _list.PaintRow += OnPaintGameRow;
@@ -169,6 +169,9 @@ internal sealed class GamePicker : Form
 
     private async void LoadGames()
     {
+        // "Try again" / "Show all games" can be clicked while a load is already running
+        if (_isLoading) return;
+
         _games.Clear();
         _addBox.Text = "";
         _isLoading = true;
@@ -216,8 +219,10 @@ internal sealed class GamePicker : Form
         return games;
     }
 
-    private GameInfo TryGetOwnedGame(uint id, string type) =>
-        _steam.Apps.IsSubscribedApp(id) ? new GameInfo(id, type, _steam.Apps.GetAppData(id, "name")) : null;
+    private GameInfo TryGetOwnedGame(uint id, string type)
+    {
+        return _steam.Apps.IsSubscribedApp(id) ? new GameInfo(id, type, _steam.Apps.GetAppData(id, "name")) : null;
+    }
 
     private void AddGame(uint id, string type)
     {
@@ -255,9 +260,11 @@ internal sealed class GamePicker : Form
         return ticked.Count > 0 ? ticked : HighlightedGames();
     }
 
-    private List<GameInfo> HighlightedGames() =>
-        _list.SelectedIndices.Cast<int>().Where(i => i >= 0 && i < _filteredGames.Count)
+    private List<GameInfo> HighlightedGames()
+    {
+        return _list.SelectedIndices.Cast<int>().Where(i => i >= 0 && i < _filteredGames.Count)
             .Select(i => _filteredGames[i]).ToList();
+    }
 
     private void UpdateSummary()
     {
@@ -292,7 +299,10 @@ internal sealed class GamePicker : Form
         return ticked > 1 ? ticked.ToString() : null;
     }
 
-    private static string Plural(int count, string word) => count == 1 ? $"1 {word}" : $"{count:N0} {word}s";
+    private static string Plural(int count, string word)
+    {
+        return count == 1 ? $"1 {word}" : $"{count:N0} {word}s";
+    }
 
     private void OnToggleGames(IReadOnlyList<int> indices)
     {
@@ -319,6 +329,13 @@ internal sealed class GamePicker : Form
 
     private void OnRetrieveVirtualItem(object sender, RetrieveVirtualItemEventArgs e)
     {
+        // the list can ask for a stale index while its size is being updated
+        if (e.ItemIndex >= _filteredGames.Count)
+        {
+            e.Item = new ListViewItem();
+            return;
+        }
+
         var game = _filteredGames[e.ItemIndex];
         e.Item = new ListViewItem(game.Name) { ToolTipText = $"{game.Name} (app {game.Id})" };
     }
@@ -340,6 +357,8 @@ internal sealed class GamePicker : Form
 
     private void OnPaintGameRow(object sender, RowPaintEventArgs e)
     {
+        if (e.Index >= _filteredGames.Count) return;
+
         var game = _filteredGames[e.Index];
         var g = e.Graphics;
         var bounds = e.Bounds;
@@ -407,12 +426,18 @@ internal sealed class GamePicker : Form
         var icon = LogicalToDeviceUnits(14);
         var pad = LogicalToDeviceUnits(10);
         Glyphs.Draw(g, glyph, new RectangleF(r.X + pad, r.Y + (r.Height - icon) / 2f, icon, icon), Theme.Text);
-        TextRenderer.DrawText(g, text, Font, Rectangle.FromLTRB(r.X + pad + icon + LogicalToDeviceUnits(6), r.Y, r.Right, r.Bottom),
+        TextRenderer.DrawText(g, text, Font,
+            Rectangle.FromLTRB(r.X + pad + icon + LogicalToDeviceUnits(6), r.Y, r.Right, r.Bottom),
             Theme.Text, TextFormatFlags.SingleLine | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
     }
 
     private bool OnRowClick(int index, Point point)
     {
+        // the buttons are only drawn on the hovered or selected row
+        if (index >= _filteredGames.Count ||
+            (index != _list.HotIndex && _list.SelectedIndices.Contains(index) == false))
+            return false;
+
         var (unlock, lockAll) = QuickActionBounds(_list.ContentBounds(index));
         var isUnlock = unlock.Contains(point);
         if (isUnlock == false && lockAll.Contains(point) == false) return false;
@@ -421,14 +446,18 @@ internal sealed class GamePicker : Form
         return true;
     }
 
-    private static string Capitalize(string text) => text.Length == 0 ? text : char.ToUpper(text[0]) + text[1..];
+    private static string Capitalize(string text)
+    {
+        return text.Length == 0 ? text : char.ToUpper(text[0]) + text[1..];
+    }
 
     private void QueueLogo(GameInfo game)
     {
         if (game.Logo != null) return;
 
-        game.LogoUrl ??= GetLogoUrl(game.Id);
-        if (game.LogoUrl == null) return;
+        // "" marks a game without art, so Steam isn't asked again on every repaint
+        game.LogoUrl ??= GetLogoUrl(game.Id) ?? "";
+        if (game.LogoUrl.Length == 0) return;
 
         if (_logos.TryGetValue(game.LogoUrl, out var cached))
             game.Logo = cached;
@@ -488,10 +517,16 @@ internal sealed class GamePicker : Form
             : $"https://cdn.steamstatic.com/steamcommunity/public/images/apps/{id}/{logo}.jpg";
     }
 
-    private static Process StartManager(uint appId) => Process.Start(Environment.ProcessPath!, $"{appId}");
+    private static Process StartManager(uint appId)
+    {
+        return Process.Start(Environment.ProcessPath!, $"{appId}");
+    }
 
     // double-click or Enter opens the highlighted rows
-    private void OnActivateGame(object sender, EventArgs e) => OpenGames(HighlightedGames());
+    private void OnActivateGame(object sender, EventArgs e)
+    {
+        OpenGames(HighlightedGames());
+    }
 
     private void OnOpenClicked(object sender, EventArgs e)
     {
@@ -584,7 +619,6 @@ internal sealed class GamePicker : Form
         _header.Progress.Visible = true;
 
         List<(GameInfo Game, string Error)> failures = [];
-        string startError = null;
         var unlocked = 0;
         var done = 0;
         try
@@ -607,22 +641,12 @@ internal sealed class GamePicker : Form
                 _header.Progress.Value = (float)done / games.Count;
             }
         }
-        catch (Win32Exception e)
-        {
-            startError = $"Couldn't start the achievement manager: {e.Message}";
-        }
         finally
         {
             _isUnlocking = false;
             _header.Progress.Visible = false;
             _statusLabel.Text = "";
             UpdateCommands();
-        }
-
-        if (startError != null)
-        {
-            _infoBar.Show(Severity.Error, startError);
-            return;
         }
 
         var achievements = Plural(unlocked, "achievement");
@@ -653,10 +677,25 @@ internal sealed class GamePicker : Form
 
     // runs "<exe> <appId> --unlock-all|--lock-all" without a window; it prints the number of changed
     // achievements, or the reason it failed on stderr with a non-zero exit code
+    // never throws: any failure becomes the game's error message
     private static async Task<(int Count, string Error)> RunSetAll(uint appId, bool unlock)
     {
+        try
+        {
+            return await RunSetAllProcess(appId, unlock);
+        }
+        catch (Exception e) when (e is Win32Exception or InvalidOperationException or IOException)
+        {
+            return (0, $"couldn't run the achievement manager ({e.Message})");
+        }
+    }
+
+    private static async Task<(int Count, string Error)> RunSetAllProcess(uint appId, bool unlock)
+    {
+        if (Environment.ProcessPath is not { } exe) return (0, "couldn't find this program's own path");
+
         using Process process = new();
-        process.StartInfo = new ProcessStartInfo(Environment.ProcessPath!,
+        process.StartInfo = new ProcessStartInfo(exe,
             $"{appId} {(unlock ? "--unlock-all" : "--lock-all")}")
         {
             UseShellExecute = false,
@@ -676,7 +715,15 @@ internal sealed class GamePicker : Form
         }
         catch (OperationCanceledException)
         {
-            process.Kill();
+            try
+            {
+                process.Kill();
+            }
+            catch (InvalidOperationException)
+            {
+                // it exited on its own just now
+            }
+
             return (0, "Steam didn't respond in time");
         }
 

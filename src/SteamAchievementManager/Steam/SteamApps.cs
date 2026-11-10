@@ -30,8 +30,13 @@ internal sealed class SteamApps(IntPtr apps001, IntPtr apps008)
         return Encoding.UTF8.GetString(buffer, 0, length < 0 ? buffer.Length : length);
     }
 
-    public string GetCurrentGameLanguage() =>
-        Marshal.PtrToStringUTF8(_apps008.Function<GetCurrentGameLanguageFn>(4)(_apps008.Self));
+    public string GetCurrentGameLanguage()
+    {
+        return Marshal.PtrToStringUTF8(_apps008.Function<GetCurrentGameLanguageFn>(4)(_apps008.Self)) ?? "english";
+    }
 
-    public bool IsSubscribedApp(uint appId) => _apps008.Function<IsSubscribedAppFn>(6)(_apps008.Self, appId);
+    public bool IsSubscribedApp(uint appId)
+    {
+        return _apps008.Function<IsSubscribedAppFn>(6)(_apps008.Self, appId);
+    }
 }

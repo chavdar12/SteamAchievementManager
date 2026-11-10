@@ -63,26 +63,40 @@ internal sealed class SteamUserStats(IntPtr address)
         return found;
     }
 
-    public bool SetStat(string name, object value) => value switch
+    public bool SetStat(string name, object value)
     {
-        float f => _stats.Function<SetStatFloatFn>(2)(_stats.Self, name, f),
-        int i => _stats.Function<SetStatIntFn>(3)(_stats.Self, name, i),
-        _ => throw new ArgumentException("stat value must be int or float", nameof(value))
-    };
+        return value switch
+        {
+            float f => _stats.Function<SetStatFloatFn>(2)(_stats.Self, name, f),
+            int i => _stats.Function<SetStatIntFn>(3)(_stats.Self, name, i),
+            _ => throw new ArgumentException("stat value must be int or float", nameof(value))
+        };
+    }
 
-    public bool GetAchievement(string name, out bool isAchieved, out uint unlockTime) =>
-        _stats.Function<GetAchievementAndUnlockTimeFn>(8)(_stats.Self, name, out isAchieved, out unlockTime);
+    public bool GetAchievement(string name, out bool isAchieved, out uint unlockTime)
+    {
+        return _stats.Function<GetAchievementAndUnlockTimeFn>(8)(_stats.Self, name, out isAchieved, out unlockTime);
+    }
 
     // slot 6 sets the achievement, slot 7 clears it
-    public bool SetAchievement(string name, bool achieved) =>
-        _stats.Function<AchievementFn>(achieved ? 6 : 7)(_stats.Self, name);
+    public bool SetAchievement(string name, bool achieved)
+    {
+        return _stats.Function<AchievementFn>(achieved ? 6 : 7)(_stats.Self, name);
+    }
 
-    public bool StoreStats() => _stats.Function<StoreStatsFn>(9)(_stats.Self);
+    public bool StoreStats()
+    {
+        return _stats.Function<StoreStatsFn>(9)(_stats.Self);
+    }
 
     // returns 0 on failure; the result arrives as a UserStatsReceived callback
-    public ulong RequestUserStats(ulong steamId) =>
-        _stats.Function<RequestUserStatsFn>(15)(_stats.Self, steamId);
+    public ulong RequestUserStats(ulong steamId)
+    {
+        return _stats.Function<RequestUserStatsFn>(15)(_stats.Self, steamId);
+    }
 
-    public bool ResetAllStats(bool achievementsToo) =>
-        _stats.Function<ResetAllStatsFn>(20)(_stats.Self, achievementsToo);
+    public bool ResetAllStats(bool achievementsToo)
+    {
+        return _stats.Function<ResetAllStatsFn>(20)(_stats.Self, achievementsToo);
+    }
 }

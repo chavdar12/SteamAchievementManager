@@ -21,6 +21,9 @@ internal sealed class AchievementManager : Form
     private GameSchema _schema;
     private bool _isLoaded;
 
+    // Steam can send stats without being asked (e.g. after a store); those must not wipe unsaved ticks
+    private bool _isAwaitingStats;
+
     private readonly List<AchievementInfo> _achievements = [];
     private readonly List<AchievementInfo> _shown = [];
     private readonly BindingList<StatInfo> _statistics = [];
@@ -75,7 +78,7 @@ internal sealed class AchievementManager : Form
         _showAll.Checked = true;
 
         _saveButton = Ui.Button(this, "Save changes", Glyphs.Save, OnSave,
-            "Store the ticked achievements and edited statistics on Steam (Ctrl+S)", primary: true);
+            "Store the ticked achievements and edited statistics on Steam (Ctrl+S)", true);
         _resetButton = Ui.Button(this, "Reset", Glyphs.Reset, OnReset, "Reset this game's statistics");
         _refreshButton = Ui.Button(this, "Refresh", Glyphs.Refresh, (_, _) => RefreshStats(),
             "Reload from Steam, dropping unsaved changes (F5)", iconOnly: true);
@@ -103,14 +106,16 @@ internal sealed class AchievementManager : Form
         _list.Dock = DockStyle.Fill;
         _list.RowHeight = LogicalToDeviceUnits(70);
         _list.EmptyText = "Loading achievements…";
-        _list.IsChecked = i => _shown[i].Checked;
-        _list.CanCheck = i => _shown[i].Definition.IsProtected == false;
+        _list.IsChecked = i => i < _shown.Count && _shown[i].Checked;
+        _list.CanCheck = i => i < _shown.Count && _shown[i].Definition.IsProtected == false;
         _list.ToggleRequested += OnToggleAchievements;
         _list.PaintRow += OnPaintAchievementRow;
         _list.RetrieveVirtualItem += (_, e) =>
         {
-            var a = _shown[e.ItemIndex];
-            e.Item = new ListViewItem(a.DisplayName) { ToolTipText = a.Description };
+            // the list can ask for a stale index while its size is being updated
+            e.Item = e.ItemIndex < _shown.Count
+                ? new ListViewItem(_shown[e.ItemIndex].DisplayName) { ToolTipText = _shown[e.ItemIndex].Description }
+                : new ListViewItem();
         };
 
         (_statsPanel, _statsGrid) = CreateStatsPage();
@@ -141,7 +146,10 @@ internal sealed class AchievementManager : Form
             _showAll.Checked = show == StateFilter.All;
             _showLocked.Checked = show == StateFilter.Locked;
             _showUnlocked.Checked = show == StateFilter.Unlocked;
-            _showButton.Text = show switch { StateFilter.Locked => "Locked", StateFilter.Unlocked => "Unlocked", _ => "All" };
+            _showButton.Text = show switch
+            {
+                StateFilter.Locked => "Locked", StateFilter.Unlocked => "Unlocked", _ => "All"
+            };
             _showButton.HideDropDown();
             ShowAchievements();
         };
@@ -264,6 +272,7 @@ internal sealed class AchievementManager : Form
     private void RefreshStats()
     {
         _isLoaded = false;
+        _isAwaitingStats = true;
         _achievements.Clear();
         _statistics.Clear();
         ShowAchievements();
@@ -286,6 +295,9 @@ internal sealed class AchievementManager : Form
 
     private void OnUserStatsReceived(UserStatsReceived param)
     {
+        if (_isAwaitingStats == false) return;
+        _isAwaitingStats = false;
+
         _refreshButton.Enabled = true;
         _statusLabel.Text = "";
 
@@ -432,6 +444,8 @@ internal sealed class AchievementManager : Form
 
     private void OnPaintAchievementRow(object sender, RowPaintEventArgs e)
     {
+        if (e.Index >= _shown.Count) return;
+
         var a = _shown[e.Index];
         var g = e.Graphics;
         var bounds = e.Bounds;
@@ -478,14 +492,16 @@ internal sealed class AchievementManager : Form
         }
 
         if (a.Definition.IsProtected)
-            DrawPill(g, "Protected", Theme.SubtleText, right.Right, y + pillHeight + lineGap, pillHeight, Glyphs.Shield);
+            DrawPill(g, "Protected", Theme.SubtleText, right.Right, y + pillHeight + lineGap, pillHeight,
+                Glyphs.Shield);
 
         // name and description
         var textRight = right.Left - LogicalToDeviceUnits(12);
         var left = iconRect.Right + LogicalToDeviceUnits(14);
         var nameHeight = TextRenderer.MeasureText(g, "Ag", Theme.RowTitleFont).Height;
         var hasDescription = a.Description.Length > 0;
-        var top = bounds.Y + (bounds.Height - nameHeight - (hasDescription ? smallHeight + LogicalToDeviceUnits(3) : 0)) / 2;
+        var top = bounds.Y +
+                  (bounds.Height - nameHeight - (hasDescription ? smallHeight + LogicalToDeviceUnits(3) : 0)) / 2;
         TextRenderer.DrawText(g, a.DisplayName, Theme.RowTitleFont,
             Rectangle.FromLTRB(left, top, textRight, top + nameHeight),
             a.IsAchieved || a.Checked ? Theme.Text : Theme.SubtleText, flags);
@@ -498,7 +514,8 @@ internal sealed class AchievementManager : Form
     // a small rounded label, right-aligned at x
     private void DrawPill(Graphics g, string text, Color color, int right, int y, int height, char glyph = '\0')
     {
-        var textWidth = TextRenderer.MeasureText(g, text, Theme.SmallBoldFont, Size.Empty, TextFormatFlags.NoPadding).Width;
+        var textWidth = TextRenderer.MeasureText(g, text, Theme.SmallBoldFont, Size.Empty, TextFormatFlags.NoPadding)
+            .Width;
         var glyphSize = glyph == 0 ? 0 : LogicalToDeviceUnits(12);
         var gap = glyph == 0 ? 0 : LogicalToDeviceUnits(5);
         var pad = LogicalToDeviceUnits(9);
@@ -559,7 +576,7 @@ internal sealed class AchievementManager : Form
             if (_steam.UserStats.SetAchievement(achievement.Definition.Id, achievement.Checked) == false)
             {
                 _infoBar.Show(Severity.Error,
-                    $"Steam refused to change \"{achievement.DisplayName}\"; nothing after it was saved.");
+                    $"Steam refused to change \"{achievement.DisplayName}\", so nothing was saved.");
                 return -1;
             }
 
@@ -577,7 +594,7 @@ internal sealed class AchievementManager : Form
             if (_steam.UserStats.SetStat(stat.Definition.Id, stat.Value) == false)
             {
                 _infoBar.Show(Severity.Error,
-                    $"Steam refused the value for \"{stat.DisplayName}\"; nothing after it was saved.");
+                    $"Steam refused the value for \"{stat.DisplayName}\", so nothing was saved.");
                 return -1;
             }
 
@@ -588,11 +605,14 @@ internal sealed class AchievementManager : Form
     {
         _statsGrid.EndEdit();
 
+        // on failure, reload so the list shows what Steam really has (some changes may be half applied)
         var achievements = StoreAchievements();
-        if (achievements < 0) return;
-
-        var stats = StoreStatistics();
-        if (stats < 0) return;
+        var stats = achievements < 0 ? -1 : StoreStatistics();
+        if (stats < 0)
+        {
+            RefreshStats();
+            return;
+        }
 
         if (achievements + stats == 0)
         {
@@ -603,6 +623,7 @@ internal sealed class AchievementManager : Form
         if (_steam.UserStats.StoreStats() == false)
         {
             _infoBar.Show(Severity.Error, "Steam couldn't store the changes.");
+            RefreshStats();
             return;
         }
 

@@ -8,16 +8,54 @@ internal sealed class KeyValueWriter
     private readonly MemoryStream _stream = new();
     private readonly BinaryWriter _writer;
 
-    public KeyValueWriter() => _writer = new BinaryWriter(_stream);
+    public KeyValueWriter()
+    {
+        _writer = new BinaryWriter(_stream);
+    }
 
-    public KeyValueWriter Begin(string name) => Header(0, name);
-    public KeyValueWriter String(string name, string value) { Header(1, name); WriteString(value); return this; }
-    public KeyValueWriter Int(string name, int value) { Header(2, name); _writer.Write(value); return this; }
-    public KeyValueWriter Float(string name, float value) { Header(3, name); _writer.Write(value); return this; }
-    public KeyValueWriter UInt64(string name, ulong value) { Header(7, name); _writer.Write(value); return this; }
-    public KeyValueWriter End() { _writer.Write((byte)8); return this; }
+    public KeyValueWriter Begin(string name)
+    {
+        return Header(0, name);
+    }
 
-    public byte[] ToArray() => _stream.ToArray();
+    public KeyValueWriter String(string name, string value)
+    {
+        Header(1, name);
+        WriteString(value);
+        return this;
+    }
+
+    public KeyValueWriter Int(string name, int value)
+    {
+        Header(2, name);
+        _writer.Write(value);
+        return this;
+    }
+
+    public KeyValueWriter Float(string name, float value)
+    {
+        Header(3, name);
+        _writer.Write(value);
+        return this;
+    }
+
+    public KeyValueWriter UInt64(string name, ulong value)
+    {
+        Header(7, name);
+        _writer.Write(value);
+        return this;
+    }
+
+    public KeyValueWriter End()
+    {
+        _writer.Write((byte)8);
+        return this;
+    }
+
+    public byte[] ToArray()
+    {
+        return _stream.ToArray();
+    }
 
     // writes the bytes to a temp file and returns its path
     public string Save()
