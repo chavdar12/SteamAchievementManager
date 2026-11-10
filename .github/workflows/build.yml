@@ -45,8 +45,9 @@ jobs:
           path: SteamAchievementManager-*.exe
 
       - name: Release
-        # master pushes get an auto tag v7.0.<run number>; a pushed v* tag is used as-is
-        if: github.event_name == 'push'
+        # only pushed version tags (git tag v7.1.0 && git push --tags) publish a release;
+        # other builds are kept as workflow artifacts
+        if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "v${{ env.VERSION }}" SteamAchievementManager-${{ env.VERSION }}.exe --target "${{ github.sha }}" --generate-notes --title "v${{ env.VERSION }}"

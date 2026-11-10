@@ -44,3 +44,12 @@ internal struct UserStatsStored : ICallback
     public ulong GameId;
     public int Result;
 }
+
+[StructLayout(LayoutKind.Sequential, Pack = 1)]
+internal struct GlobalAchievementPercentagesReady : ICallback
+{
+    public static int Id => 1110;
+
+    public ulong GameId;
+    public int Result;
+}

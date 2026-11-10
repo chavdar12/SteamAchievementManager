@@ -11,6 +11,7 @@
         <Compile Include="..\..\src\SteamAchievementManager\Manager\StatInfo.cs" Link="Source\StatInfo.cs"/>
         <Compile Include="..\..\src\SteamAchievementManager\Steam\SteamLibrary.cs" Link="Source\SteamLibrary.cs"/>
         <Compile Include="..\..\src\SteamAchievementManager\Steam\Callbacks.cs" Link="Source\Callbacks.cs"/>
+        <Compile Include="..\..\src\SteamAchievementManager\Steam\LocalConfig.cs" Link="Source\LocalConfig.cs"/>
     </ItemGroup>
     <ItemGroup>
         <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1"/>

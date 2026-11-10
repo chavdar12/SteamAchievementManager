@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Globalization;
 using System.Xml.XPath;
 using SteamAchievementManager.Common;
 using SteamAchievementManager.Steam;
@@ -25,7 +26,8 @@ internal sealed class GamePicker : Form
     private bool _isDownloadingLogos;
 
     private readonly ToolStripTextBox _searchBox;
-    private readonly ToolStripMenuItem _showGames, _showDemos, _showMods, _showJunk;
+    private readonly ToolStripMenuItem _showGames, _showDemos, _showMods, _showJunk, _onlyWithAchievements;
+    private readonly ToolStripMenuItem _sortByName, _sortByRecent;
     private readonly ToolStripButton _refreshButton, _openButton, _unlockButton;
     private readonly ToolStripTextBox _addBox;
     private readonly Ui.Header _header;
@@ -56,12 +58,22 @@ internal sealed class GamePicker : Form
         _searchBox.TextChanged += (_, _) => RefreshGames();
         _searchBox.KeyDown += OnSearchKeyDown;
 
-        var filter = Ui.DropDown(this, "Show", Glyphs.Filter, "Choose which kinds of apps are listed");
-        _showGames = FilterItem("Games", true);
-        _showDemos = FilterItem("Demos", false);
-        _showMods = FilterItem("Mods", false);
-        _showJunk = FilterItem("Other apps", false);
-        filter.DropDownItems.AddRange([_showGames, _showDemos, _showMods, _showJunk]);
+        var settings = Settings.Load();
+        var filter = Ui.DropDown(this, "Show", Glyphs.Filter, "Choose which apps are listed and their order");
+        _showGames = FilterItem("Games", settings.ShowGames);
+        _showDemos = FilterItem("Demos", settings.ShowDemos);
+        _showMods = FilterItem("Mods", settings.ShowMods);
+        _showJunk = FilterItem("Other apps", settings.ShowJunk);
+        _onlyWithAchievements = FilterItem("Only games with achievement data", settings.OnlyWithAchievements);
+        _onlyWithAchievements.ToolTipText =
+            "Games Steam has achievement data for on this PC; launch a game once to add it";
+        _sortByName = SortItem("Sort by name");
+        _sortByRecent = SortItem("Sort by recently played");
+        (settings.GameSort == "recent" ? _sortByRecent : _sortByName).Checked = true;
+        filter.DropDownItems.AddRange([
+            _showGames, _showDemos, _showMods, _showJunk, new ToolStripSeparator(), _onlyWithAchievements,
+            new ToolStripSeparator(), _sortByName, _sortByRecent
+        ]);
 
         _addBox = Ui.SearchBox(this, "App ID", 70);
         _addBox.KeyDown += (_, e) =>
@@ -113,8 +125,39 @@ internal sealed class GamePicker : Form
         Controls.Add(toolbar);
         Controls.Add(Ui.StatusBar(this, _statusLabel, _downloadLabel));
 
+        Settings.Restore(this, settings.Picker);
+        Ui.WatchThemeChanges(this, _infoBar);
         _steam.OnCallback<AppDataChanged>(OnAppDataChanged);
         LoadGames();
+    }
+
+    protected override void OnFormClosing(FormClosingEventArgs e)
+    {
+        base.OnFormClosing(e);
+        if (e.Cancel) return;
+
+        Settings.Update(s =>
+        {
+            s.Picker = Settings.PlacementOf(this);
+            s.ShowGames = _showGames.Checked;
+            s.ShowDemos = _showDemos.Checked;
+            s.ShowMods = _showMods.Checked;
+            s.ShowJunk = _showJunk.Checked;
+            s.OnlyWithAchievements = _onlyWithAchievements.Checked;
+            s.GameSort = _sortByRecent.Checked ? "recent" : "name";
+        });
+    }
+
+    private ToolStripMenuItem SortItem(string text)
+    {
+        ToolStripMenuItem item = new(text);
+        item.Click += (_, _) =>
+        {
+            _sortByName.Checked = item == _sortByName;
+            _sortByRecent.Checked = item == _sortByRecent;
+            RefreshGames();
+        };
+        return item;
     }
 
     private ToolStripMenuItem FilterItem(string text, bool isChecked)
@@ -179,24 +222,58 @@ internal sealed class GamePicker : Form
         _filteredGames.Clear();
         _list.SetCount(0);
         _list.EmptyText = "Loading your games…";
+        // games come from the achievement data Steam keeps on this PC, plus the community list
+        // (which also knows games not launched yet and which apps are demos, mods or junk)
+        var schemaIds = await Task.Run(CachedSchemaIds);
+        var lastPlayed = await Task.Run(() => LocalConfig.LoadLastPlayed(_steam.SteamId));
+
+        List<(uint Id, string Type)> listed = [];
+        string listError = null;
         try
         {
             _statusLabel.Text = "Downloading game list…";
-            var list = await Http.Client.GetByteArrayAsync(GameListUrl);
-
-            _statusLabel.Text = "Checking which games you own…";
-            var owned = await Task.Run(() => ParseGameList(list).Select(g => TryGetOwnedGame(g.Id, g.Type))
-                .Where(g => g != null).ToList());
-            foreach (var game in owned) _games.TryAdd(game.Id, game);
+            var xml = await Http.Client.GetByteArrayAsync(GameListUrl);
+            listed = ParseGameList(xml);
         }
         catch (Exception e)
         {
-            AddGame(DefaultGameId, "normal");
-            _infoBar.Show(Severity.Error, $"Couldn't download the game list: {e.Message}",
-                [new InfoAction("Try again", LoadGames)], e.ToString());
+            listError = e.Message;
         }
 
         if (IsDisposed) return;
+
+        _statusLabel.Text = "Checking which games you own…";
+        var types = listed.GroupBy(g => g.Id).ToDictionary(g => g.Key, g => g.First().Type);
+        var candidates = types.Keys.Union(schemaIds).ToList();
+        List<GameInfo> owned = [];
+        try
+        {
+            owned = await Task.Run(() => candidates
+                .Select(id => TryGetOwnedGame(id, types.GetValueOrDefault(id, "normal"))).Where(g => g != null)
+                .ToList());
+        }
+        catch (Exception e)
+        {
+            listError ??= e.Message;
+        }
+
+        if (IsDisposed) return;
+
+        foreach (var game in owned)
+        {
+            game.HasAchievements = schemaIds.Contains(game.Id);
+            game.LastPlayed = lastPlayed.GetValueOrDefault(game.Id);
+            _games.TryAdd(game.Id, game);
+        }
+
+        if (_games.Count == 0) AddGame(DefaultGameId, "normal");
+
+        if (listError != null)
+            _infoBar.Show(Severity.Warning,
+                $"Couldn't download the community game list ({listError}). Showing the games found on this PC.",
+                [new InfoAction("Try again", LoadGames)]);
+        else
+            CheckForUpdate();
 
         _isLoading = false;
         _statusLabel.Text = "";
@@ -204,6 +281,49 @@ internal sealed class GamePicker : Form
         RefreshGames();
         UpdateCommands();
         DownloadLogos();
+    }
+
+    // app IDs with a UserGameStatsSchema_<id>.bin in Steam's cache
+    private static HashSet<uint> CachedSchemaIds()
+    {
+        const string prefix = "UserGameStatsSchema_";
+        try
+        {
+            return Directory
+                .EnumerateFiles(Path.Combine(SteamLibrary.InstallPath ?? "", "appcache", "stats"), prefix + "*.bin")
+                .Select(f => uint.TryParse(Path.GetFileNameWithoutExtension(f)[prefix.Length..], NumberStyles.None,
+                    CultureInfo.InvariantCulture, out var id)
+                    ? id
+                    : 0)
+                .Where(id => id != 0).ToHashSet();
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return [];
+        }
+    }
+
+    private async void CheckForUpdate()
+    {
+        if (await UpdateCheck.FindNewerAsync() is not { } update || IsDisposed || _infoBar.Visible) return;
+
+        _infoBar.Show(Severity.Info, $"Version {update.Version} is available.",
+        [
+            new InfoAction("Download", () => OpenInBrowser(update.Url)),
+            new InfoAction("Later", null)
+        ]);
+    }
+
+    private void OpenInBrowser(string url)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true })?.Dispose();
+        }
+        catch (Exception e) when (e is Win32Exception or InvalidOperationException)
+        {
+            _infoBar.Show(Severity.Error, $"Couldn't open the browser. The download page is {url}");
+        }
     }
 
     private static List<(uint Id, string Type)> ParseGameList(byte[] xml)
@@ -226,7 +346,10 @@ internal sealed class GamePicker : Form
 
     private void AddGame(uint id, string type)
     {
-        if (_games.ContainsKey(id) == false && TryGetOwnedGame(id, type) is { } game) _games.Add(id, game);
+        if (_games.ContainsKey(id) || TryGetOwnedGame(id, type) is not { } game) return;
+
+        game.HasAchievements = CachedSchemaIds().Contains(id);
+        _games.Add(id, game);
     }
 
     private void RefreshGames()
@@ -247,7 +370,9 @@ internal sealed class GamePicker : Form
             .Where(g => g.Name.Contains(search, StringComparison.OrdinalIgnoreCase) ||
                         g.Id.ToString().Equals(search, StringComparison.Ordinal))
             .Where(g => wantedTypes.GetValueOrDefault(g.Type, true))
-            .OrderBy(g => g.Name, StringComparer.CurrentCultureIgnoreCase));
+            .Where(g => _onlyWithAchievements.Checked == false || g.HasAchievements)
+            .OrderByDescending(g => _sortByRecent.Checked ? g.LastPlayed : 0)
+            .ThenBy(g => g.Name, StringComparer.CurrentCultureIgnoreCase));
 
         _list.SetCount(_filteredGames.Count);
         UpdateSummary();
@@ -401,6 +526,11 @@ internal sealed class GamePicker : Form
 
         var detail = $"App ID {game.Id}";
         if (game.Type != "normal") detail += "  ·  " + (game.Type == "junk" ? "Other" : Capitalize(game.Type));
+        if (game.LastPlayed > 0)
+            detail += "  ·  Last played " +
+                      DateTimeOffset.FromUnixTimeSeconds(game.LastPlayed).LocalDateTime
+                          .ToString("d MMM yyyy", CultureInfo.CurrentCulture);
+        if (game.HasAchievements == false) detail += "  ·  No achievement data yet (launch the game once)";
         TextRenderer.DrawText(g, detail, Theme.SmallFont,
             Rectangle.FromLTRB(left, top + nameHeight + LogicalToDeviceUnits(2), textRight, bounds.Bottom),
             Theme.SubtleText, flags);

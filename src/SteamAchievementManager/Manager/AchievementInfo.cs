@@ -18,6 +18,9 @@ internal sealed class AchievementInfo(AchievementDefinition definition, bool isA
     public string DisplayName => HasName ? Definition.Name : Definition.Id;
     public string Description => HasName ? Definition.Description ?? "" : "";
 
+    // the share of all players (0-100) who have it; null until Steam sends the global stats
+    public float? Rarity { get; set; }
+
     // icon file name on the Steam CDN
     public string Icon => IsAchieved ? Definition.IconNormal : Definition.IconLocked;
 }

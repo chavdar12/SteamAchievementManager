@@ -29,6 +29,11 @@ internal sealed class AchievementManager : Form
     private readonly BindingList<StatInfo> _statistics = [];
     private StateFilter _show = StateFilter.All;
 
+    // "game" (the game's own order), "name", "rarest" or "recent"
+    private string _sort;
+    private readonly Dictionary<string, ToolStripMenuItem> _sortItems = [];
+    private readonly Dictionary<string, float> _rarity = [];
+
     private readonly Dictionary<string, Image> _icons = [];
     private readonly Queue<string> _iconQueue = new();
     private readonly HashSet<string> _iconsQueued = [];
@@ -74,8 +79,34 @@ internal sealed class AchievementManager : Form
         _showAll = ShowItem("All achievements", StateFilter.All);
         _showLocked = ShowItem("Locked only", StateFilter.Locked);
         _showUnlocked = ShowItem("Unlocked only", StateFilter.Unlocked);
-        _showButton.DropDownItems.AddRange([_showAll, _showLocked, _showUnlocked]);
+        _showButton.DropDownItems.AddRange([_showAll, _showLocked, _showUnlocked, new ToolStripSeparator()]);
         _showAll.Checked = true;
+
+        var settings = Settings.Load();
+        _sort = settings.AchievementSort;
+        foreach (var (key, text) in new[]
+                 {
+                     ("game", "Game's order"), ("name", "Sort by name"), ("rarest", "Rarest first"),
+                     ("recent", "Recently unlocked first")
+                 })
+        {
+            ToolStripMenuItem item = new(text) { Checked = key == _sort };
+            item.Click += (_, _) =>
+            {
+                _sort = key;
+                foreach (var (other, otherItem) in _sortItems) otherItem.Checked = other == key;
+                _showButton.HideDropDown();
+                ShowAchievements();
+            };
+            _sortItems[key] = item;
+            _showButton.DropDownItems.Add(item);
+        }
+
+        if (_sortItems.ContainsKey(_sort) == false)
+        {
+            _sort = "game";
+            _sortItems[_sort].Checked = true;
+        }
 
         _saveButton = Ui.Button(this, "Save changes", Glyphs.Save, OnSave,
             "Store the ticked achievements and edited statistics on Steam (Ctrl+S)", true);
@@ -114,7 +145,12 @@ internal sealed class AchievementManager : Form
         {
             // the list can ask for a stale index while its size is being updated
             e.Item = e.ItemIndex < _shown.Count
-                ? new ListViewItem(_shown[e.ItemIndex].DisplayName) { ToolTipText = _shown[e.ItemIndex].Description }
+                ? new ListViewItem(_shown[e.ItemIndex].DisplayName)
+                {
+                    ToolTipText = (_shown[e.ItemIndex].Definition.IsProtected
+                        ? "Protected: only the game's servers can change it.\n"
+                        : "") + _shown[e.ItemIndex].Description
+                }
                 : new ListViewItem();
         };
 
@@ -133,7 +169,10 @@ internal sealed class AchievementManager : Form
         Controls.Add(Ui.StatusBar(this, _statusLabel, _downloadLabel));
 
         ShowPage(false);
+        Settings.Restore(this, settings.Manager);
+        Ui.WatchThemeChanges(this, _infoBar);
         steam.OnCallback<UserStatsReceived>(OnUserStatsReceived);
+        steam.OnCallback<GlobalAchievementPercentagesReady>(OnGlobalPercentagesReady);
         RefreshStats();
     }
 
@@ -236,6 +275,43 @@ internal sealed class AchievementManager : Form
         return (panel, grid);
     }
 
+    private int UnsavedChanges => _achievements.Count(a => a.IsModified) + _statistics.Count(s => s.IsModified);
+
+    // set by "Close without saving"
+    private bool _discardChanges;
+
+    protected override void OnFormClosing(FormClosingEventArgs e)
+    {
+        _statsGrid.EndEdit();
+
+        // only the user closing the window (or "Restart") is held up; Windows shutting down must not be blocked
+        if (e.CloseReason == CloseReason.UserClosing &&
+            _discardChanges == false && _isLoaded &&
+            UnsavedChanges is var changes and > 0)
+        {
+            e.Cancel = true;
+            _infoBar.Show(Severity.Warning,
+                $"You have {changes} unsaved change{(changes == 1 ? "" : "s")}. Close anyway?",
+                [
+                    new InfoAction("Close without saving", () =>
+                    {
+                        _discardChanges = true;
+                        Close();
+                    }),
+                    new InfoAction("Keep editing", null)
+                ]);
+        }
+
+        base.OnFormClosing(e);
+        if (e.Cancel) return;
+
+        Settings.Update(s =>
+        {
+            s.Manager = Settings.PlacementOf(this);
+            s.AchievementSort = _sort;
+        });
+    }
+
     protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
     {
         switch (keyData)
@@ -329,8 +405,26 @@ internal sealed class AchievementManager : Form
 
         _isLoaded = true;
         EnableInput(true);
+
+        // rarity is extra: if Steam doesn't answer, rows just don't show it
+        if (_rarity.Count == 0) _steam.UserStats.RequestGlobalAchievementPercentages();
         _list.EmptyText = _achievements.Count == 0 ? "This game has no achievements." : "No achievements match.";
         ShowAchievements();
+    }
+
+    private void OnGlobalPercentagesReady(GlobalAchievementPercentagesReady param)
+    {
+        if (param.Result != 1) return;
+
+        foreach (var achievement in _achievements)
+            if (_steam.UserStats.GetAchievementAchievedPercent(achievement.Definition.Id, out var percent))
+            {
+                _rarity[achievement.Definition.Id] = percent;
+                achievement.Rarity = percent;
+            }
+
+        if (_sort == "rarest") ShowAchievements();
+        else _list.Invalidate();
     }
 
     private void ShowLoadError(string message, string details = null)
@@ -351,7 +445,10 @@ internal sealed class AchievementManager : Form
                 continue;
 
             _achievements.Add(new AchievementInfo(def, isAchieved,
-                isAchieved && unlockTime > 0 ? DateTimeOffset.FromUnixTimeSeconds(unlockTime).LocalDateTime : null));
+                isAchieved && unlockTime > 0 ? DateTimeOffset.FromUnixTimeSeconds(unlockTime).LocalDateTime : null)
+            {
+                Rarity = _rarity.TryGetValue(def.Id, out var percent) ? percent : null
+            });
         }
     }
 
@@ -368,10 +465,17 @@ internal sealed class AchievementManager : Form
     {
         var search = _searchBox.Text.Trim();
         _shown.Clear();
-        _shown.AddRange(_achievements.Where(a =>
+        var matches = _achievements.Where(a =>
             (_show == StateFilter.All || a.IsAchieved == (_show == StateFilter.Unlocked)) &&
             (a.DisplayName.Contains(search, StringComparison.OrdinalIgnoreCase) ||
-             a.Description.Contains(search, StringComparison.OrdinalIgnoreCase))));
+             a.Description.Contains(search, StringComparison.OrdinalIgnoreCase)));
+        _shown.AddRange(_sort switch
+        {
+            "name" => matches.OrderBy(a => a.DisplayName, StringComparer.CurrentCultureIgnoreCase),
+            "rarest" => matches.OrderBy(a => a.Rarity ?? float.MaxValue),
+            "recent" => matches.OrderByDescending(a => a.UnlockTime ?? DateTime.MinValue),
+            _ => matches
+        });
         _list.SetCount(_shown.Count);
         UpdateHeader();
     }
@@ -386,7 +490,7 @@ internal sealed class AchievementManager : Form
         }
 
         var unlocked = _achievements.Count(a => a.IsAchieved);
-        var changes = _achievements.Count(a => a.IsModified) + _statistics.Count(s => s.IsModified);
+        var changes = UnsavedChanges;
         var text = _achievements.Count == 0
             ? "No achievements"
             : $"{unlocked} of {_achievements.Count} achievements unlocked ({100 * unlocked / _achievements.Count}%)";
@@ -470,7 +574,7 @@ internal sealed class AchievementManager : Form
         var smallHeight = TextRenderer.MeasureText(g, "Ag", Theme.SmallFont).Height;
         var rightWidth = LogicalToDeviceUnits(170);
         var right = Rectangle.FromLTRB(bounds.Right - rightWidth, bounds.Top, bounds.Right, bounds.Bottom);
-        var lines = a.Definition.IsProtected ? 2 : 1;
+        var lines = a.Rarity.HasValue ? 2 : 1;
         var lineGap = LogicalToDeviceUnits(6);
         var pillHeight = smallHeight + LogicalToDeviceUnits(6);
         var y = bounds.Y + (bounds.Height - pillHeight * lines - lineGap * (lines - 1)) / 2;
@@ -491,19 +595,31 @@ internal sealed class AchievementManager : Form
                 flags | TextFormatFlags.Right | TextFormatFlags.VerticalCenter);
         }
 
-        if (a.Definition.IsProtected)
-            DrawPill(g, "Protected", Theme.SubtleText, right.Right, y + pillHeight + lineGap, pillHeight,
-                Glyphs.Shield);
+        if (a.Rarity is { } rarity)
+            TextRenderer.DrawText(g,
+                $"{rarity.ToString(rarity < 1 ? "0.0#" : "0.#", CultureInfo.CurrentCulture)}% of players",
+                Theme.SmallFont, new Rectangle(right.X, y + pillHeight + lineGap, right.Width, pillHeight),
+                rarity < 5 ? Theme.Warning : Theme.SubtleText,
+                flags | TextFormatFlags.Right | TextFormatFlags.VerticalCenter);
 
-        // name and description
+        // name and description; protected ones get a shield in front of the name
         var textRight = right.Left - LogicalToDeviceUnits(12);
         var left = iconRect.Right + LogicalToDeviceUnits(14);
         var nameHeight = TextRenderer.MeasureText(g, "Ag", Theme.RowTitleFont).Height;
         var hasDescription = a.Description.Length > 0;
         var top = bounds.Y +
                   (bounds.Height - nameHeight - (hasDescription ? smallHeight + LogicalToDeviceUnits(3) : 0)) / 2;
+        var nameLeft = left;
+        if (a.Definition.IsProtected)
+        {
+            var shield = LogicalToDeviceUnits(14);
+            Glyphs.Draw(g, Glyphs.Shield, new RectangleF(left, top + (nameHeight - shield) / 2f, shield, shield),
+                Theme.SubtleText);
+            nameLeft += shield + LogicalToDeviceUnits(6);
+        }
+
         TextRenderer.DrawText(g, a.DisplayName, Theme.RowTitleFont,
-            Rectangle.FromLTRB(left, top, textRight, top + nameHeight),
+            Rectangle.FromLTRB(nameLeft, top, textRight, top + nameHeight),
             a.IsAchieved || a.Checked ? Theme.Text : Theme.SubtleText, flags);
         if (hasDescription)
             TextRenderer.DrawText(g, a.Description, Theme.SmallFont,

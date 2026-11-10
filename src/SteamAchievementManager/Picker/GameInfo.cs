@@ -16,6 +16,12 @@ internal sealed class GameInfo(uint id, string type, string name)
     public string LogoUrl { get; set; }
     public Image Logo { get; set; }
 
+    // Steam has this game's achievement definitions cached on this PC (so it can be managed)
+    public bool HasAchievements { get; set; }
+
+    // Unix time; 0 if never played or unknown
+    public long LastPlayed { get; set; }
+
     // ticked in the list
     public bool Checked { get; set; }
 }

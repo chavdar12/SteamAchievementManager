@@ -18,6 +18,10 @@ Steam Achievement Manager (SAM) is a lightweight, portable application used to m
 - Games are picked with checkboxes (click a box, press Space, or use **Select all**). **Open** opens one manager window per ticked game; Enter or double-click opens the highlighted row.
 - **Unlock all achievements** unlocks every achievement in all ticked games in one click. Games are processed one at a time in the background without opening any windows, with progress and a per-game failure report; protected achievements are skipped. Can also be run from the command line: `SteamAchievementManager.exe <appid> --unlock-all` (or `--lock-all`; prints the number changed; exit code 1 and the reason on stderr on failure).
 - Keyboard shortcuts: Ctrl+F search, F5 refresh, Ctrl+S save (in a game), Space toggles the selected rows.
+- Games are found from the achievement data Steam keeps on your PC (so the list works offline) plus the community game list. Sort by name or recently played, and optionally show only games with achievement data.
+- Each achievement shows how many players have it; sort by rarity, name, unlock date or the game's order.
+- Window size, position, filters and sort order are remembered (`%LOCALAPPDATA%\SteamAchievementManager\settings.json`), and game art is cached there so it loads instantly next time.
+- On startup the app checks GitHub for a newer release and offers it in the message bar.
 - Builds and releases are produced by GitHub Actions.
 
 ## Building
@@ -45,7 +49,7 @@ Project layout (`src/SteamAchievementManager/`):
 - `Common/`: shared UI pieces (theme colors, Fluent icon glyphs, the toolbar renderer, the checkbox list, the message bar, image downloads).
 - `Assets/`: the app icon, embedded into the executable.
 
-Every push to `master` builds it and publishes a GitHub release.
+Every push builds it. A release is published only when a version tag is pushed: `git tag v7.1.0 && git push --tags`.
 
 ## History
 

@@ -37,6 +37,14 @@ internal delegate bool StoreStatsFn(IntPtr self);
 internal delegate ulong RequestUserStatsFn(IntPtr self, ulong steamId);
 
 [UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+internal delegate ulong RequestGlobalAchievementPercentagesFn(IntPtr self);
+
+[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+[return: MarshalAs(UnmanagedType.I1)]
+internal delegate bool GetAchievementAchievedPercentFn(IntPtr self,
+    [MarshalAs(UnmanagedType.LPUTF8Str)] string name, out float percent);
+
+[UnmanagedFunctionPointer(CallingConvention.ThisCall)]
 [return: MarshalAs(UnmanagedType.I1)]
 internal delegate bool ResetAllStatsFn(IntPtr self, [MarshalAs(UnmanagedType.I1)] bool achievementsToo);
 
@@ -93,6 +101,18 @@ internal sealed class SteamUserStats(IntPtr address)
     public ulong RequestUserStats(ulong steamId)
     {
         return _stats.Function<RequestUserStatsFn>(15)(_stats.Self, steamId);
+    }
+
+    // returns 0 on failure; the result arrives as a GlobalAchievementPercentagesReady callback
+    public ulong RequestGlobalAchievementPercentages()
+    {
+        return _stats.Function<RequestGlobalAchievementPercentagesFn>(33)(_stats.Self);
+    }
+
+    // the share of all players (0-100) who have the achievement
+    public bool GetAchievementAchievedPercent(string name, out float percent)
+    {
+        return _stats.Function<GetAchievementAchievedPercentFn>(36)(_stats.Self, name, out percent);
     }
 
     public bool ResetAllStats(bool achievementsToo)

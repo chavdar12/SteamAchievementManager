@@ -1,8 +1,55 @@
+using System.ComponentModel;
+using System.Diagnostics;
+using Microsoft.Win32;
+
 namespace SteamAchievementManager.Common;
 
 // factories for the shared toolbar, status bar and header pieces
 internal static class Ui
 {
+    // the colors are picked at startup, so a light/dark switch while running offers a restart
+    public static void WatchThemeChanges(Form form, InfoBar infoBar)
+    {
+        var startedDark = Theme.IsDark;
+        UserPreferenceChangedEventHandler handler = (_, e) =>
+        {
+            if (e.Category != UserPreferenceCategory.General || IsSystemDark() == startedDark ||
+                form.IsHandleCreated == false || form.IsDisposed)
+                return;
+
+            // raised on a system thread
+            form.BeginInvoke(() => infoBar.Show(Severity.Info,
+                $"Windows switched to {(startedDark ? "light" : "dark")} mode. Restart to update the colors.",
+                [new InfoAction("Restart", () => Restart(form)), new InfoAction("Later", null)]));
+        };
+        SystemEvents.UserPreferenceChanged += handler;
+        form.Disposed += (_, _) => SystemEvents.UserPreferenceChanged -= handler;
+    }
+
+    // starts a fresh copy only once the window really closed; the unsaved-changes warning can cancel it
+    private static void Restart(Form form)
+    {
+        form.Close();
+        if (form.IsDisposed == false) return;
+
+        try
+        {
+            ProcessStartInfo start = new(Environment.ProcessPath!);
+            foreach (var arg in Environment.GetCommandLineArgs().Skip(1)) start.ArgumentList.Add(arg);
+            Process.Start(start)?.Dispose();
+        }
+        catch (Win32Exception)
+        {
+            // the window is already gone; the user can start the app again by hand
+        }
+    }
+
+    private static bool IsSystemDark()
+    {
+        return Registry.GetValue(@"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+            "AppsUseLightTheme", 1) is 0;
+    }
+
     public static ToolStrip Toolbar(Control owner)
     {
         return new ToolStrip
