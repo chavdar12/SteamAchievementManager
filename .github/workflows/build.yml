@@ -42,7 +42,8 @@ jobs:
           path: SteamAchievementManager-*.zip
 
       - name: Release
-        if: startsWith(github.ref, 'refs/tags/v')
+        # master pushes get an auto tag v7.0.<run number>; a pushed v* tag is used as-is
+        if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${{ github.ref_name }}" SteamAchievementManager-${{ env.VERSION }}.zip --generate-notes --title "${{ github.ref_name }}"
+        run: gh release create "v${{ env.VERSION }}" SteamAchievementManager-${{ env.VERSION }}.zip --target "${{ github.sha }}" --generate-notes --title "v${{ env.VERSION }}"
