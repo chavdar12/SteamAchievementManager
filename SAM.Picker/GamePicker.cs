@@ -437,31 +437,33 @@ namespace SAM.Picker
 
         private void OnActivateGame(object sender, EventArgs e)
         {
-            var focusedItem = (sender as MyListView)?.FocusedItem;
-            var index = focusedItem != null ? focusedItem.Index : -1;
-            if (index < 0 || index >= this._FilteredGames.Count)
+            foreach (int index in this._GameListView.SelectedIndices)
             {
-                return;
-            }
+                if (index < 0 || index >= this._FilteredGames.Count)
+                {
+                    continue;
+                }
 
-            var info = this._FilteredGames[index];
-            if (info == null)
-            {
-                return;
-            }
+                var info = this._FilteredGames[index];
+                if (info == null)
+                {
+                    continue;
+                }
 
-            try
-            {
-                Process.Start("SAM.Game.exe", info.Id.ToString(CultureInfo.InvariantCulture));
-            }
-            catch (Win32Exception)
-            {
-                MessageBox.Show(
-                    this,
-                    "Failed to start SAM.Game.exe.",
-                    "Error",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Error);
+                try
+                {
+                    Process.Start("SAM.Game.exe", info.Id.ToString(CultureInfo.InvariantCulture));
+                }
+                catch (Win32Exception)
+                {
+                    MessageBox.Show(
+                        this,
+                        "Failed to start SAM.Game.exe.",
+                        "Error",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Error);
+                    return;
+                }
             }
         }
 
@@ -512,6 +514,25 @@ namespace SAM.Picker
 
             // Compatibility with _GameListView SearchForVirtualItemEventHandler (otherwise _SearchGameTextBox loose focus on KeyUp)
             this._SearchGameTextBox.Focus();
+        }
+
+        private void OnSelectAll(object sender, EventArgs e)
+        {
+            this._GameListView.SelectAll();
+            this._GameListView.Select();
+        }
+
+        private void OnGameListViewDrawSubItem(object sender, DrawListViewSubItemEventArgs e)
+        {
+            e.DrawDefault = true;
+        }
+
+        private void OnGameListViewResize(object sender, EventArgs e)
+        {
+            if (this._GameListView.Columns.Count > 0)
+            {
+                this._GameListView.Columns[0].Width = this._GameListView.ClientSize.Width;
+            }
         }
 
         private void OnGameListViewDrawItem(object sender, DrawListViewItemEventArgs e)

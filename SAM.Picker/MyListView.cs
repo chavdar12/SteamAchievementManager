@@ -110,10 +110,34 @@ namespace SAM.Picker
             return false;
         }
 
+        public void SelectAll()
+        {
+            // index -1 applies the state to every item, which is fast in virtual mode
+            Win32.LVITEM item = new() { stateMask = 2 /*LVIS_SELECTED*/, state = 2 };
+            Win32.SendMessage(this.Handle, 0x102B /*LVM_SETITEMSTATE*/, new IntPtr(-1), ref item);
+        }
+
         private static class Win32
         {
             [DllImport("user32.dll", SetLastError = true)]
             public static extern int GetScrollPos(IntPtr hWnd, int nBar);
+
+            [StructLayout(LayoutKind.Sequential)]
+            public struct LVITEM
+            {
+                public uint mask;
+                public int iItem;
+                public int iSubItem;
+                public uint state;
+                public uint stateMask;
+                public IntPtr pszText;
+                public int cchTextMax;
+                public int iImage;
+                public IntPtr lParam;
+            }
+
+            [DllImport("user32.dll")]
+            public static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, ref LVITEM lParam);
         }
     }
 }

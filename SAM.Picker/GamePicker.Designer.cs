@@ -36,6 +36,7 @@
             this._CallbackTimer = new System.Windows.Forms.Timer(this.components);
             this._PickerToolStrip = new System.Windows.Forms.ToolStrip();
             this._RefreshGamesButton = new System.Windows.Forms.ToolStripButton();
+            this._SelectAllButton = new System.Windows.Forms.ToolStripButton();
             this._AddGameTextBox = new System.Windows.Forms.ToolStripTextBox();
             this._AddGameButton = new System.Windows.Forms.ToolStripButton();
             this._FindGamesLabel = new System.Windows.Forms.ToolStripLabel();
@@ -88,12 +89,19 @@
             _ToolStripSeparator2,
             this._FindGamesLabel,
             this._SearchGameTextBox,
-            this._FilterDropDownButton});
+            this._FilterDropDownButton,
+            this._SelectAllButton});
             this._PickerToolStrip.Location = new System.Drawing.Point(0, 0);
             this._PickerToolStrip.Name = "_PickerToolStrip";
             this._PickerToolStrip.Size = new System.Drawing.Size(742, 25);
             this._PickerToolStrip.TabIndex = 1;
             this._PickerToolStrip.Text = "toolStrip1";
+            //
+            // _SelectAllButton
+            //
+            this._SelectAllButton.Name = "_SelectAllButton";
+            this._SelectAllButton.Text = "Select All";
+            this._SelectAllButton.Click += new System.EventHandler(this.OnSelectAll);
             //
             // _RefreshGamesButton
             //
@@ -188,7 +196,11 @@
             this._GameListView.HideSelection = false;
             this._GameListView.LargeImageList = this._LogoImageList;
             this._GameListView.Location = new System.Drawing.Point(0, 25);
-            this._GameListView.MultiSelect = false;
+            this._GameListView.MultiSelect = true;
+            this._GameListView.View = System.Windows.Forms.View.Details;
+            this._GameListView.FullRowSelect = true;
+            this._GameListView.HeaderStyle = System.Windows.Forms.ColumnHeaderStyle.None;
+            this._GameListView.Columns.Add("Name", 700);
             this._GameListView.Name = "_GameListView";
             this._GameListView.OwnerDraw = true;
             this._GameListView.Size = new System.Drawing.Size(742, 245);
@@ -199,6 +211,8 @@
             this._GameListView.UseCompatibleStateImageBehavior = false;
             this._GameListView.VirtualMode = true;
             this._GameListView.DrawItem += new System.Windows.Forms.DrawListViewItemEventHandler(this.OnGameListViewDrawItem);
+            this._GameListView.DrawSubItem += new System.Windows.Forms.DrawListViewSubItemEventHandler(this.OnGameListViewDrawSubItem);
+            this._GameListView.Resize += new System.EventHandler(this.OnGameListViewResize);
             this._GameListView.ItemActivate += new System.EventHandler(this.OnActivateGame);
             this._GameListView.RetrieveVirtualItem += new System.Windows.Forms.RetrieveVirtualItemEventHandler(this.OnGameListViewRetrieveVirtualItem);
             this._GameListView.SearchForVirtualItem += new System.Windows.Forms.SearchForVirtualItemEventHandler(this.OnGameListViewSearchForVirtualItem);
@@ -265,6 +279,7 @@
         private System.Windows.Forms.Timer _CallbackTimer;
         private System.Windows.Forms.ToolStrip _PickerToolStrip;
         private System.Windows.Forms.ToolStripButton _RefreshGamesButton;
+        private System.Windows.Forms.ToolStripButton _SelectAllButton;
         private System.Windows.Forms.ToolStripTextBox _AddGameTextBox;
         private System.Windows.Forms.ToolStripButton _AddGameButton;
         private System.Windows.Forms.ToolStripDropDownButton _FilterDropDownButton;
