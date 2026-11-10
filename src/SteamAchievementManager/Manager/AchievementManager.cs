@@ -7,183 +7,343 @@ using SteamAchievementManager.Steam;
 namespace SteamAchievementManager.Manager;
 
 // views and edits one game's achievements and stats
-internal sealed partial class AchievementManager : Form
+internal sealed class AchievementManager : Form
 {
+    private enum StateFilter
+    {
+        All,
+        Locked,
+        Unlocked
+    }
+
     private readonly uint _gameId;
     private readonly SteamClient _steam;
-
-    // unlock-all mode: runs invisibly, unlocks everything it can, stores and closes
-    private readonly bool _unlockAll;
-
-    private readonly BindingList<StatInfo> _statistics = [];
-    private readonly Queue<ListViewItem> _iconQueue = new();
     private GameSchema _schema;
+    private bool _isLoaded;
+
+    private readonly List<AchievementInfo> _achievements = [];
+    private readonly List<AchievementInfo> _shown = [];
+    private readonly BindingList<StatInfo> _statistics = [];
+    private StateFilter _show = StateFilter.All;
+
+    private readonly Dictionary<string, Image> _icons = [];
+    private readonly Queue<string> _iconQueue = new();
+    private readonly HashSet<string> _iconsQueued = [];
+    private readonly HashSet<string> _iconsAttempted = [];
     private bool _isDownloadingIcons;
-    private bool _isUpdatingAchievementList;
 
-    public AchievementManager(uint gameId, SteamClient steam, bool unlockAll)
+    private readonly ToolStripButton _achievementsTab, _statisticsTab;
+    private readonly ToolStripTextBox _searchBox;
+    private readonly ToolStripDropDownButton _showButton;
+    private readonly ToolStripMenuItem _showAll, _showLocked, _showUnlocked;
+    private readonly ToolStripItem[] _achievementTools;
+    private readonly ToolStripButton _saveButton, _refreshButton, _resetButton;
+    private readonly Ui.Header _header;
+    private readonly InfoBar _infoBar = new();
+    private readonly ModernList _list = new();
+    private readonly Panel _statsPanel;
+    private readonly DataGridView _statsGrid;
+    private readonly ToolStripStatusLabel _statusLabel = Ui.StatusLabel(true);
+    private readonly ToolStripStatusLabel _downloadLabel = Ui.StatusLabel(false);
+
+    public AchievementManager(uint gameId, SteamClient steam)
     {
-        InitializeComponent();
-
-        _AchievementImageList.Images.Add("Blank", new Bitmap(64, 64));
-        _StatisticsDataGridView.AutoGenerateColumns = false;
-        _StatisticsDataGridView.DataSource = new BindingSource { DataSource = _statistics };
-
         _gameId = gameId;
         _steam = steam;
-        _unlockAll = unlockAll;
 
-        Text += " | " + (steam.Apps.GetAppData(gameId, "name") ?? gameId.ToString(CultureInfo.InvariantCulture));
+        var gameName = steam.Apps.GetAppData(gameId, "name") ?? gameId.ToString(CultureInfo.InvariantCulture);
+        Text = $"{gameName} — Steam Achievement Manager";
+        Icon = Assets.App;
+        BackColor = Theme.Background;
+        ForeColor = Theme.Text;
+        StartPosition = FormStartPosition.CenterScreen;
+        ClientSize = new Size(LogicalToDeviceUnits(980), LogicalToDeviceUnits(700));
+        MinimumSize = new Size(LogicalToDeviceUnits(760), LogicalToDeviceUnits(460));
 
-        steam.OnCallback<UserStatsReceived>(OnUserStatsReceived);
-        if (unlockAll)
+        var toolbar = Ui.Toolbar(this);
+        _achievementsTab = Ui.Button(this, "Achievements", Glyphs.Star, (_, _) => ShowPage(false));
+        _statisticsTab = Ui.Button(this, "Statistics", Glyphs.Chart, (_, _) => ShowPage(true));
+
+        _searchBox = Ui.SearchBox(this, "Search achievements", 180);
+        _searchBox.TextChanged += (_, _) => ShowAchievements();
+
+        _showButton = Ui.DropDown(this, "All", Glyphs.Filter, "Filter by state");
+        _showAll = ShowItem("All achievements", StateFilter.All);
+        _showLocked = ShowItem("Locked only", StateFilter.Locked);
+        _showUnlocked = ShowItem("Unlocked only", StateFilter.Unlocked);
+        _showButton.DropDownItems.AddRange([_showAll, _showLocked, _showUnlocked]);
+        _showAll.Checked = true;
+
+        _saveButton = Ui.Button(this, "Save changes", Glyphs.Save, OnSave,
+            "Store the ticked achievements and edited statistics on Steam (Ctrl+S)", primary: true);
+        _resetButton = Ui.Button(this, "Reset", Glyphs.Reset, OnReset, "Reset this game's statistics");
+        _refreshButton = Ui.Button(this, "Refresh", Glyphs.Refresh, (_, _) => RefreshStats(),
+            "Reload from Steam, dropping unsaved changes (F5)", iconOnly: true);
+        foreach (var item in new ToolStripItem[] { _saveButton, _resetButton, _refreshButton })
+            item.Alignment = ToolStripItemAlignment.Right;
+
+        _achievementTools =
+        [
+            Ui.Separator(this),
+            Ui.Icon(this, Glyphs.Search), _searchBox, _showButton,
+            Ui.Separator(this),
+            Ui.Button(this, "Unlock all", Glyphs.Unlock, (_, _) => SetAll(_ => true), "Tick every listed achievement"),
+            Ui.Button(this, "Lock all", Glyphs.Lock, (_, _) => SetAll(_ => false), "Untick every listed achievement"),
+            Ui.Button(this, "Invert", Glyphs.Invert, (_, _) => SetAll(a => !a.Checked), "Flip every listed achievement",
+                iconOnly: true)
+        ];
+
+        toolbar.Items.AddRange([_achievementsTab, _statisticsTab]);
+        toolbar.Items.AddRange(_achievementTools);
+        toolbar.Items.AddRange([_saveButton, _resetButton, _refreshButton]);
+
+        _header = new Ui.Header(this) { Title = { Text = gameName } };
+        _header.Progress.Visible = true;
+
+        _list.Dock = DockStyle.Fill;
+        _list.RowHeight = LogicalToDeviceUnits(70);
+        _list.EmptyText = "Loading achievements…";
+        _list.IsChecked = i => _shown[i].Checked;
+        _list.CanCheck = i => _shown[i].Definition.IsProtected == false;
+        _list.ToggleRequested += OnToggleAchievements;
+        _list.PaintRow += OnPaintAchievementRow;
+        _list.RetrieveVirtualItem += (_, e) =>
         {
-            Opacity = 0;
-            ShowInTaskbar = false;
-            steam.OnCallback<UserStatsStored>(OnUserStatsStored);
-        }
+            var a = _shown[e.ItemIndex];
+            e.Item = new ListViewItem(a.DisplayName) { ToolTipText = a.Description };
+        };
 
+        (_statsPanel, _statsGrid) = CreateStatsPage();
+        _statsPanel.Visible = false;
+
+        _downloadLabel.Image = Glyphs.Image(Glyphs.Download, LogicalToDeviceUnits(14), Theme.SubtleText);
+        _downloadLabel.Visible = false;
+
+        // docking runs from the last added control inwards
+        Controls.Add(_list);
+        Controls.Add(_statsPanel);
+        Controls.Add(_infoBar);
+        Controls.Add(_header);
+        Controls.Add(toolbar);
+        Controls.Add(Ui.StatusBar(this, _statusLabel, _downloadLabel));
+
+        ShowPage(false);
+        steam.OnCallback<UserStatsReceived>(OnUserStatsReceived);
         RefreshStats();
     }
 
-    public bool UnlockAllSucceeded { get; private set; }
+    private ToolStripMenuItem ShowItem(string text, StateFilter show)
+    {
+        ToolStripMenuItem item = new(text);
+        item.Click += (_, _) =>
+        {
+            _show = show;
+            _showAll.Checked = show == StateFilter.All;
+            _showLocked.Checked = show == StateFilter.Locked;
+            _showUnlocked.Checked = show == StateFilter.Unlocked;
+            _showButton.Text = show switch { StateFilter.Locked => "Locked", StateFilter.Unlocked => "Unlocked", _ => "All" };
+            _showButton.HideDropDown();
+            ShowAchievements();
+        };
+        return item;
+    }
+
+    private (Panel, DataGridView) CreateStatsPage()
+    {
+        var padding = LogicalToDeviceUnits(12);
+        Panel panel = new()
+        {
+            Dock = DockStyle.Fill,
+            BackColor = Theme.Background,
+            Padding = new Padding(padding, LogicalToDeviceUnits(4), padding, padding)
+        };
+
+        DataGridView grid = new()
+        {
+            Dock = DockStyle.Fill,
+            AutoGenerateColumns = false,
+            AllowUserToAddRows = false,
+            AllowUserToDeleteRows = false,
+            AllowUserToResizeRows = false,
+            RowHeadersVisible = false,
+            BorderStyle = BorderStyle.None,
+            CellBorderStyle = DataGridViewCellBorderStyle.SingleHorizontal,
+            ColumnHeadersBorderStyle = DataGridViewHeaderBorderStyle.None,
+            ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing,
+            ColumnHeadersHeight = LogicalToDeviceUnits(36),
+            AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
+            EnableHeadersVisualStyles = false,
+            SelectionMode = DataGridViewSelectionMode.CellSelect,
+            BackgroundColor = Theme.Surface,
+            GridColor = Theme.Border
+        };
+        Padding cellPadding = new(LogicalToDeviceUnits(10), 0, LogicalToDeviceUnits(10), 0);
+        grid.DefaultCellStyle = new DataGridViewCellStyle
+        {
+            BackColor = Theme.Surface, ForeColor = Theme.Text, SelectionBackColor = Theme.SurfaceSelected,
+            SelectionForeColor = Theme.Text, Padding = cellPadding
+        };
+        grid.ColumnHeadersDefaultCellStyle = new DataGridViewCellStyle
+        {
+            BackColor = Theme.Surface, ForeColor = Theme.SubtleText, SelectionBackColor = Theme.Surface,
+            SelectionForeColor = Theme.SubtleText, Font = Theme.SmallBoldFont, Padding = cellPadding
+        };
+        grid.RowTemplate.Height = LogicalToDeviceUnits(34);
+
+        DataGridViewTextBoxColumn value = new()
+        {
+            DataPropertyName = "Value", HeaderText = "Value", ReadOnly = true, FillWeight = 25
+        };
+        grid.Columns.AddRange(
+            new DataGridViewTextBoxColumn
+            {
+                DataPropertyName = "DisplayName", HeaderText = "Name", ReadOnly = true, FillWeight = 50
+            },
+            value,
+            new DataGridViewTextBoxColumn
+            {
+                DataPropertyName = "Extra", HeaderText = "Flags", ReadOnly = true, FillWeight = 25,
+                DefaultCellStyle = { ForeColor = Theme.SubtleText }
+            });
+        grid.DataSource = new BindingSource { DataSource = _statistics };
+        grid.CellFormatting += (_, e) =>
+        {
+            if (e.Value is "None") e.Value = "";
+        };
+        grid.DataError += OnStatDataError;
+        grid.CellEndEdit += (_, _) => UpdateHeader();
+
+        CheckBox allow = new()
+        {
+            Dock = DockStyle.Bottom,
+            AutoSize = true,
+            ForeColor = Theme.SubtleText,
+            Padding = new Padding(0, LogicalToDeviceUnits(10), 0, 0),
+            Text = "Let me edit values. I understand changing stats can break things and only I am to blame."
+        };
+        allow.CheckedChanged += (_, _) => value.ReadOnly = allow.Checked == false;
+
+        panel.Controls.Add(grid);
+        panel.Controls.Add(allow);
+        return (panel, grid);
+    }
+
+    protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+    {
+        switch (keyData)
+        {
+            case Keys.Control | Keys.S:
+                if (_saveButton.Enabled) OnSave(null, EventArgs.Empty);
+                return true;
+            case Keys.F5:
+                if (_refreshButton.Enabled) RefreshStats();
+                return true;
+            case Keys.Control | Keys.F:
+                ShowPage(false);
+                _searchBox.Focus();
+                _searchBox.SelectAll();
+                return true;
+            case Keys.Control | Keys.A when _list.Focused:
+                _list.SelectAllRows();
+                return true;
+        }
+
+        return base.ProcessCmdKey(ref msg, keyData);
+    }
+
+    private void ShowPage(bool statistics)
+    {
+        _achievementsTab.Checked = statistics == false;
+        _statisticsTab.Checked = statistics;
+        foreach (var item in _achievementTools) item.Visible = statistics == false;
+        _list.Visible = statistics == false;
+        _statsPanel.Visible = statistics;
+        (statistics ? (Control)_statsGrid : _list).Focus();
+    }
 
     private void RefreshStats()
     {
-        _AchievementListView.Items.Clear();
+        _isLoaded = false;
+        _achievements.Clear();
         _statistics.Clear();
+        ShowAchievements();
+        _list.EmptyText = "Loading achievements…";
+        EnableInput(false);
 
         // the result arrives as the UserStatsReceived callback
         if (_steam.UserStats.RequestUserStats(_steam.SteamId) == 0)
         {
-            Dialogs.Error(this, "Failed.");
+            _infoBar.Show(Severity.Error, "Couldn't request stats from Steam.",
+                [new InfoAction("Try again", RefreshStats)]);
+            _list.EmptyText = "Couldn't load achievements.";
+            _refreshButton.Enabled = true;
             return;
         }
 
-        _GameStatusLabel.Text = "Retrieving stat information...";
-        EnableInput(false);
+        _statusLabel.Text = "Retrieving achievements and statistics…";
+        UpdateHeader();
     }
 
     private void OnUserStatsReceived(UserStatsReceived param)
     {
-        var loaded = LoadStats(param.Result);
-        if (_unlockAll == false) return;
+        _refreshButton.Enabled = true;
+        _statusLabel.Text = "";
 
-        if (loaded == false)
+        if (param.Result != 1)
         {
-            Close();
+            ShowLoadError(param.Result == 2
+                ? "Steam returned no stats — this usually means you don't own the game."
+                : $"Steam returned error {param.Result} while retrieving stats.");
             return;
-        }
-
-        // protected achievements cannot be set; skip them instead of prompting
-        foreach (ListViewItem item in _AchievementListView.Items)
-            if (item.Tag is AchievementInfo { Definition.IsProtected: false })
-                item.Checked = true;
-
-        var count = StoreAchievements();
-        if (count == 0)
-        {
-            UnlockAllSucceeded = true;
-            Close();
-        }
-        else if (count < 0 || StoreStats() == false)
-        {
-            Close();
-        }
-
-        // otherwise close in OnUserStatsStored, so exiting does not cut off the store
-    }
-
-    private void OnUserStatsStored(UserStatsStored param)
-    {
-        UnlockAllSucceeded = param.Result == 1;
-        Close();
-    }
-
-    private bool LoadStats(int result)
-    {
-        EnableInput(true);
-
-        if (result != 1)
-        {
-            var reason = result == 2 ? "generic error -- this usually means you don't own the game" : $"{result}";
-            _GameStatusLabel.Text = $"Error while retrieving stats: {reason}";
-            return false;
         }
 
         _schema = GameSchema.Load(_gameId, _steam.Apps.GetCurrentGameLanguage());
         if (_schema == null)
         {
-            _GameStatusLabel.Text = "Failed to load schema.";
-            return false;
+            ShowLoadError("This game has no achievement data in Steam's cache. Launch it once, then refresh.");
+            return;
         }
 
         try
         {
-            ShowAchievements();
-            ShowStatistics();
+            LoadAchievements();
+            LoadStatistics();
         }
         catch (Exception e)
         {
-            _GameStatusLabel.Text = "Error when handling stats retrieval.";
-            Dialogs.Error(this, "Error when handling stats retrieval:\n" + e);
-            return false;
+            ShowLoadError($"Error while reading stats: {e.Message}", e.ToString());
+            return;
         }
 
-        _GameStatusLabel.Text =
-            $"Retrieved {_AchievementListView.Items.Count} achievements and {_statistics.Count} statistics.";
-        return true;
+        _isLoaded = true;
+        EnableInput(true);
+        _list.EmptyText = _achievements.Count == 0 ? "This game has no achievements." : "No achievements match.";
+        ShowAchievements();
     }
 
-    private void ShowAchievements()
+    private void ShowLoadError(string message, string details = null)
     {
-        var search = _MatchingStringTextBox.Text;
-        var wantLocked = _DisplayLockedOnlyButton.Checked;
-        var wantUnlocked = _DisplayUnlockedOnlyButton.Checked;
+        _list.EmptyText = "Couldn't load achievements.";
+        _list.Invalidate();
+        _infoBar.Show(Severity.Error, message, [new InfoAction("Try again", RefreshStats)], details);
+        UpdateHeader();
+    }
 
-        _isUpdatingAchievementList = true;
-        _iconQueue.Clear();
-        _AchievementListView.BeginUpdate();
-        _AchievementListView.Items.Clear();
-
-        foreach (var def in _schema?.Achievements ?? [])
+    private void LoadAchievements()
+    {
+        _achievements.Clear();
+        foreach (var def in _schema.Achievements)
         {
             if (string.IsNullOrEmpty(def.Id) ||
                 _steam.UserStats.GetAchievement(def.Id, out var isAchieved, out var unlockTime) == false)
                 continue;
 
-            if ((wantLocked || wantUnlocked) && (isAchieved ? wantUnlocked : wantLocked) == false) continue;
-
-            if (def.Name.Contains(search, StringComparison.OrdinalIgnoreCase) == false &&
-                def.Description.Contains(search, StringComparison.OrdinalIgnoreCase) == false)
-                continue;
-
-            AchievementInfo info = new(def, isAchieved,
-                isAchieved && unlockTime > 0 ? DateTimeOffset.FromUnixTimeSeconds(unlockTime).LocalDateTime : null);
-
-            // names starting with '#' are untranslated tokens; show the ID instead
-            var hasName = def.Name.StartsWith('#') == false;
-            ListViewItem item = new(hasName ? def.Name : def.Id)
-            {
-                Checked = isAchieved,
-                Tag = info,
-                ImageIndex = 0,
-                ForeColor = def.IsProtected ? SystemColors.GrayText : SystemColors.WindowText
-            };
-            item.SubItems.Add(hasName ? def.Description : "");
-            item.SubItems.Add(info.UnlockTime?.ToString() ?? "");
-            _AchievementListView.Items.Add(item);
-
-            if (_unlockAll == false) QueueIcon(item);
+            _achievements.Add(new AchievementInfo(def, isAchieved,
+                isAchieved && unlockTime > 0 ? DateTimeOffset.FromUnixTimeSeconds(unlockTime).LocalDateTime : null));
         }
-
-        _AchievementListView.EndUpdate();
-        _isUpdatingAchievementList = false;
-
-        DownloadIcons();
     }
 
-    private void ShowStatistics()
+    private void LoadStatistics()
     {
         _statistics.Clear();
         foreach (var def in _schema.Stats)
@@ -192,66 +352,218 @@ internal sealed partial class AchievementManager : Form
                 _statistics.Add(new StatInfo(def, value));
     }
 
-    // uses the cached icon when it was already downloaded; returns false if it needs downloading
-    private bool TrySetCachedIcon(ListViewItem item)
+    private void ShowAchievements()
     {
-        var index = _AchievementImageList.Images.IndexOfKey(((AchievementInfo)item.Tag).Icon);
-        if (index < 0) return false;
-
-        item.ImageIndex = index;
-        return true;
+        var search = _searchBox.Text.Trim();
+        _shown.Clear();
+        _shown.AddRange(_achievements.Where(a =>
+            (_show == StateFilter.All || a.IsAchieved == (_show == StateFilter.Unlocked)) &&
+            (a.DisplayName.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+             a.Description.Contains(search, StringComparison.OrdinalIgnoreCase))));
+        _list.SetCount(_shown.Count);
+        UpdateHeader();
     }
 
-    private void QueueIcon(ListViewItem item)
+    private void UpdateHeader()
     {
-        if (string.IsNullOrEmpty(((AchievementInfo)item.Tag).Icon) == false && TrySetCachedIcon(item) == false)
-            _iconQueue.Enqueue(item);
+        if (_isLoaded == false)
+        {
+            _header.Subtitle.Text = "Loading…";
+            _header.Progress.Value = 0;
+            return;
+        }
+
+        var unlocked = _achievements.Count(a => a.IsAchieved);
+        var changes = _achievements.Count(a => a.IsModified) + _statistics.Count(s => s.IsModified);
+        var text = _achievements.Count == 0
+            ? "No achievements"
+            : $"{unlocked} of {_achievements.Count} achievements unlocked ({100 * unlocked / _achievements.Count}%)";
+        if (changes > 0) text += $"  ·  {changes} unsaved change{(changes == 1 ? "" : "s")}";
+        _header.Subtitle.Text = text;
+        _header.Progress.Value = _achievements.Count == 0 ? 0 : (float)unlocked / _achievements.Count;
+    }
+
+    private void EnableInput(bool enabled)
+    {
+        _saveButton.Enabled = enabled;
+        _resetButton.Enabled = enabled;
+        _refreshButton.Enabled = enabled;
+    }
+
+    private void OnToggleAchievements(IReadOnlyList<int> indices)
+    {
+        var picked = indices.Where(i => i < _shown.Count).Select(i => _shown[i]).ToList();
+        var editable = picked.Where(a => a.Definition.IsProtected == false).ToList();
+        var value = editable.Any(a => a.Checked == false);
+        foreach (var achievement in editable) achievement.Checked = value;
+
+        var locked = picked.Count - editable.Count;
+        if (locked > 0)
+            _infoBar.Show(Severity.Warning, locked == 1 && picked.Count == 1
+                ? $"\"{picked[0].DisplayName}\" is protected: only the game's servers can change it."
+                : $"Skipped {locked} protected achievement{(locked == 1 ? "" : "s")}: only the game's servers can change them.");
+
+        _list.Invalidate();
+        UpdateHeader();
+    }
+
+    private void SetAll(Func<AchievementInfo, bool> change)
+    {
+        var skipped = 0;
+        foreach (var achievement in _shown)
+        {
+            var value = change(achievement);
+            if (achievement.Definition.IsProtected)
+            {
+                if (value != achievement.Checked) skipped++;
+                continue;
+            }
+
+            achievement.Checked = value;
+        }
+
+        if (skipped > 0)
+            _infoBar.Show(Severity.Info,
+                $"Skipped {skipped} protected achievement{(skipped == 1 ? "" : "s")}: only the game's servers can change them.");
+
+        _list.Invalidate();
+        UpdateHeader();
+    }
+
+    private void OnPaintAchievementRow(object sender, RowPaintEventArgs e)
+    {
+        var a = _shown[e.Index];
+        var g = e.Graphics;
+        var bounds = e.Bounds;
+
+        var iconSize = LogicalToDeviceUnits(44);
+        Rectangle iconRect = new(bounds.X, bounds.Y + (bounds.Height - iconSize) / 2, iconSize, iconSize);
+        var radius = LogicalToDeviceUnits(6);
+        if (string.IsNullOrEmpty(a.Icon) == false && _icons.TryGetValue(a.Icon, out var icon))
+        {
+            Theme.DrawRoundedImage(g, icon, iconRect, radius);
+        }
+        else
+        {
+            Theme.FillRounded(g, Theme.Placeholder, iconRect, radius);
+            Glyphs.Draw(g, Glyphs.Star, iconRect, Theme.DisabledText, LogicalToDeviceUnits(18));
+            QueueIcon(a.Icon);
+        }
+
+        // right column: pending change, unlock date or lock state, and the protected badge
+        const TextFormatFlags flags = TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis |
+                                      TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding;
+        var smallHeight = TextRenderer.MeasureText(g, "Ag", Theme.SmallFont).Height;
+        var rightWidth = LogicalToDeviceUnits(170);
+        var right = Rectangle.FromLTRB(bounds.Right - rightWidth, bounds.Top, bounds.Right, bounds.Bottom);
+        var lines = a.Definition.IsProtected ? 2 : 1;
+        var lineGap = LogicalToDeviceUnits(6);
+        var pillHeight = smallHeight + LogicalToDeviceUnits(6);
+        var y = bounds.Y + (bounds.Height - pillHeight * lines - lineGap * (lines - 1)) / 2;
+
+        if (a.IsModified)
+        {
+            var color = a.Checked ? Theme.Accent : Theme.Danger;
+            DrawPill(g, a.Checked ? "Will unlock" : "Will lock", color, right.Right, y, pillHeight);
+        }
+        else
+        {
+            var status = a.IsAchieved
+                ? a.UnlockTime is { } time ? time.ToString("d MMM yyyy, HH:mm", CultureInfo.CurrentCulture) : "Unlocked"
+                : "Locked";
+            TextRenderer.DrawText(g, status, Theme.SmallFont,
+                new Rectangle(right.X, y, right.Width, pillHeight),
+                a.IsAchieved ? Theme.SubtleText : Theme.DisabledText,
+                flags | TextFormatFlags.Right | TextFormatFlags.VerticalCenter);
+        }
+
+        if (a.Definition.IsProtected)
+            DrawPill(g, "Protected", Theme.SubtleText, right.Right, y + pillHeight + lineGap, pillHeight, Glyphs.Shield);
+
+        // name and description
+        var textRight = right.Left - LogicalToDeviceUnits(12);
+        var left = iconRect.Right + LogicalToDeviceUnits(14);
+        var nameHeight = TextRenderer.MeasureText(g, "Ag", Theme.RowTitleFont).Height;
+        var hasDescription = a.Description.Length > 0;
+        var top = bounds.Y + (bounds.Height - nameHeight - (hasDescription ? smallHeight + LogicalToDeviceUnits(3) : 0)) / 2;
+        TextRenderer.DrawText(g, a.DisplayName, Theme.RowTitleFont,
+            Rectangle.FromLTRB(left, top, textRight, top + nameHeight),
+            a.IsAchieved || a.Checked ? Theme.Text : Theme.SubtleText, flags);
+        if (hasDescription)
+            TextRenderer.DrawText(g, a.Description, Theme.SmallFont,
+                Rectangle.FromLTRB(left, top + nameHeight + LogicalToDeviceUnits(3), textRight, bounds.Bottom),
+                Theme.SubtleText, flags);
+    }
+
+    // a small rounded label, right-aligned at x
+    private void DrawPill(Graphics g, string text, Color color, int right, int y, int height, char glyph = '\0')
+    {
+        var textWidth = TextRenderer.MeasureText(g, text, Theme.SmallBoldFont, Size.Empty, TextFormatFlags.NoPadding).Width;
+        var glyphSize = glyph == 0 ? 0 : LogicalToDeviceUnits(12);
+        var gap = glyph == 0 ? 0 : LogicalToDeviceUnits(5);
+        var pad = LogicalToDeviceUnits(9);
+        var width = textWidth + glyphSize + gap + pad * 2;
+        RectangleF pill = new(right - width, y, width, height);
+
+        Theme.FillRounded(g, Color.FromArgb(Theme.IsDark ? 50 : 30, color), pill, height / 2f);
+        if (glyph != 0)
+            Glyphs.Draw(g, glyph, new RectangleF(pill.X + pad, y + (height - glyphSize) / 2f, glyphSize, glyphSize),
+                color);
+        TextRenderer.DrawText(g, text, Theme.SmallBoldFont,
+            new Rectangle((int)pill.X + pad + glyphSize + gap, y, textWidth + 2, height), color,
+            TextFormatFlags.SingleLine | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+    }
+
+    private void QueueIcon(string icon)
+    {
+        if (string.IsNullOrEmpty(icon) || _icons.ContainsKey(icon) || _iconsAttempted.Contains(icon) ||
+            _iconsQueued.Add(icon) == false)
+            return;
+
+        _iconQueue.Enqueue(icon);
+        BeginInvoke(new Action(DownloadIcons));
     }
 
     // downloads queued icons one at a time
     private async void DownloadIcons()
     {
-        if (_isDownloadingIcons) return;
+        if (_isDownloadingIcons || IsDisposed) return;
 
         _isDownloadingIcons = true;
-        while (_iconQueue.TryDequeue(out var item))
+        while (_iconQueue.TryDequeue(out var icon))
         {
-            // another achievement may have downloaded the same icon meanwhile
-            if (TrySetCachedIcon(item)) continue;
+            _iconsQueued.Remove(icon);
+            _downloadLabel.Text = $"Downloading {1 + _iconQueue.Count} icons…";
+            _downloadLabel.Visible = true;
 
-            _DownloadStatusLabel.Text = $"Downloading {1 + _iconQueue.Count} icons...";
-            _DownloadStatusLabel.Visible = true;
-
-            var icon = ((AchievementInfo)item.Tag).Icon;
+            _iconsAttempted.Add(icon);
             var bitmap = await Http.TryGetImageAsync(
                 $"https://cdn.steamstatic.com/steamcommunity/public/images/apps/{_gameId}/{icon}");
             if (IsDisposed) return;
             if (bitmap == null) continue;
 
-            item.ImageIndex = _AchievementImageList.Images.Count;
-            _AchievementImageList.Images.Add(icon, bitmap);
+            _icons[icon] = bitmap;
+            _list.Invalidate();
         }
 
-        _DownloadStatusLabel.Visible = false;
+        _downloadLabel.Visible = false;
         _isDownloadingIcons = false;
     }
 
     // returns the number of changed achievements, or -1 on failure
     private int StoreAchievements()
     {
-        var changed = _AchievementListView.Items.Cast<ListViewItem>()
-            .Where(item => item.Tag is AchievementInfo info && info.IsAchieved != item.Checked).ToList();
-
-        foreach (var item in changed)
+        var changed = _achievements.Where(a => a.IsModified).ToList();
+        foreach (var achievement in changed)
         {
-            var info = (AchievementInfo)item.Tag;
-            if (_steam.UserStats.SetAchievement(info.Definition.Id, item.Checked) == false)
+            if (_steam.UserStats.SetAchievement(achievement.Definition.Id, achievement.Checked) == false)
             {
-                Dialogs.Error(this, $"An error occurred while setting the state for {info.Definition.Id}, aborting store.");
+                _infoBar.Show(Severity.Error,
+                    $"Steam refused to change \"{achievement.DisplayName}\"; nothing after it was saved.");
                 return -1;
             }
 
-            info.IsAchieved = item.Checked;
+            achievement.IsAchieved = achievement.Checked;
         }
 
         return changed.Count;
@@ -261,119 +573,78 @@ internal sealed partial class AchievementManager : Form
     private int StoreStatistics()
     {
         var changed = _statistics.Where(stat => stat.IsModified).ToList();
-
         foreach (var stat in changed)
             if (_steam.UserStats.SetStat(stat.Definition.Id, stat.Value) == false)
             {
-                Dialogs.Error(this, $"An error occurred while setting the value for {stat.Definition.Id}, aborting store.");
+                _infoBar.Show(Severity.Error,
+                    $"Steam refused the value for \"{stat.DisplayName}\"; nothing after it was saved.");
                 return -1;
             }
 
         return changed.Count;
     }
 
-    // commits the set achievements and stats to Steam
-    private bool StoreStats()
+    private void OnSave(object sender, EventArgs e)
     {
-        if (_steam.UserStats.StoreStats()) return true;
+        _statsGrid.EndEdit();
 
-        Dialogs.Error(this, "An error occurred while storing, aborting.");
-        return false;
-    }
-
-    private void EnableInput(bool enabled)
-    {
-        _ReloadButton.Enabled = enabled;
-        _StoreButton.Enabled = enabled;
-    }
-
-    private void OnStore(object sender, EventArgs e)
-    {
         var achievements = StoreAchievements();
-        var stats = achievements < 0 ? -1 : StoreStatistics();
-        if (stats >= 0 && StoreStats())
-            Dialogs.Info(this, $"Stored {achievements} achievements and {stats} statistics.");
+        if (achievements < 0) return;
 
-        RefreshStats();
-    }
+        var stats = StoreStatistics();
+        if (stats < 0) return;
 
-    private void OnRefresh(object sender, EventArgs e)
-    {
-        RefreshStats();
-    }
-
-    private void OnResetAllStats(object sender, EventArgs e)
-    {
-        if (Dialogs.Confirm(this, "Are you absolutely sure you want to reset stats?", "Warning") == false) return;
-
-        var achievementsToo = Dialogs.Confirm(this, "Do you want to reset achievements too?", "Question",
-            MessageBoxIcon.Question);
-
-        if (Dialogs.Confirm(this, "Really really sure?", "Warning", MessageBoxIcon.Error) == false) return;
-
-        if (_steam.UserStats.ResetAllStats(achievementsToo) == false)
+        if (achievements + stats == 0)
         {
-            Dialogs.Error(this, "Failed.");
+            _infoBar.Show(Severity.Info, "There are no changes to save.");
             return;
         }
 
+        if (_steam.UserStats.StoreStats() == false)
+        {
+            _infoBar.Show(Severity.Error, "Steam couldn't store the changes.");
+            return;
+        }
+
+        var parts = new List<string>();
+        if (achievements > 0) parts.Add($"{achievements} achievement{(achievements == 1 ? "" : "s")}");
+        if (stats > 0) parts.Add($"{stats} statistic{(stats == 1 ? "" : "s")}");
+        _infoBar.Show(Severity.Success, $"Saved {string.Join(" and ", parts)}.");
+
         RefreshStats();
     }
 
-    private void OnLockAll(object sender, EventArgs e) => SetAllChecked(_ => false);
-
-    private void OnInvertAll(object sender, EventArgs e) => SetAllChecked(isChecked => !isChecked);
-
-    private void OnUnlockAll(object sender, EventArgs e) => SetAllChecked(_ => true);
-
-    private void SetAllChecked(Func<bool, bool> change)
+    private void OnReset(object sender, EventArgs e)
     {
-        foreach (ListViewItem item in _AchievementListView.Items) item.Checked = change(item.Checked);
+        _infoBar.Show(Severity.Warning,
+            "Reset all statistics for this game? This can't be undone.",
+            [
+                new InfoAction("Reset statistics", () => ResetStats(false)),
+                new InfoAction("Reset statistics and achievements", () => ResetStats(true)),
+                new InfoAction("Cancel", null)
+            ]);
     }
 
-    private void OnCheckAchievement(object sender, ItemCheckEventArgs e)
+    private void ResetStats(bool achievementsToo)
     {
-        if (_isUpdatingAchievementList ||
-            _AchievementListView.Items[e.Index].Tag is not AchievementInfo { Definition.IsProtected: true })
+        if (_steam.UserStats.ResetAllStats(achievementsToo) == false)
+        {
+            _infoBar.Show(Severity.Error, "Steam couldn't reset the statistics.");
             return;
+        }
 
-        Dialogs.Error(this,
-            "Sorry, but this is a protected achievement and cannot be managed with Steam Achievement Manager.");
-        e.NewValue = e.CurrentValue;
-    }
-
-    // "locked" and "unlocked" are exclusive
-    private void OnDisplayFilterChanged(object sender, EventArgs e)
-    {
-        var other = sender == _DisplayLockedOnlyButton ? _DisplayUnlockedOnlyButton : _DisplayLockedOnlyButton;
-        if (((ToolStripButton)sender).Checked) other.Checked = false;
-
-        ShowAchievements();
-    }
-
-    private void OnSearchChanged(object sender, EventArgs e)
-    {
-        ShowAchievements();
+        _infoBar.Show(Severity.Success, achievementsToo ? "Statistics and achievements reset." : "Statistics reset.");
+        RefreshStats();
     }
 
     private void OnStatDataError(object sender, DataGridViewDataErrorEventArgs e)
     {
-        if (e.Context != DataGridViewDataErrorContexts.Commit) return;
+        if (e.Context.HasFlag(DataGridViewDataErrorContexts.Commit) == false) return;
 
         e.ThrowException = false;
         e.Cancel = true;
-        _StatisticsDataGridView.Rows[e.RowIndex].ErrorText = e.Exception is StatIsProtectedException
-            ? "Stat is protected! -- you can't modify it"
-            : "Invalid value";
-    }
-
-    private void OnStatCellEndEdit(object sender, DataGridViewCellEventArgs e)
-    {
-        _StatisticsDataGridView.Rows[e.RowIndex].ErrorText = "";
-    }
-
-    private void OnStatAgreementChecked(object sender, EventArgs e)
-    {
-        _StatValueColumn.ReadOnly = _EnableStatsEditingCheckBox.Checked == false;
+        _infoBar.Show(Severity.Warning, e.Exception is StatIsProtectedException
+            ? "That statistic is protected and can't be changed."
+            : "That isn't a valid value for this statistic.");
     }
 }

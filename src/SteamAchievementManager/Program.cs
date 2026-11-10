@@ -1,5 +1,4 @@
 using System.Globalization;
-using SteamAchievementManager.Common;
 using SteamAchievementManager.Manager;
 using SteamAchievementManager.Picker;
 using SteamAchievementManager.Steam;
@@ -8,7 +7,8 @@ namespace SteamAchievementManager;
 
 internal static class Program
 {
-    // no args: game picker; <appId> [--unlock-all]: achievement manager for that game
+    // no args: game picker; <appId>: achievement manager for that game;
+    // <appId> --unlock-all / --lock-all: unlocks or locks everything without showing a window
     [STAThread]
     private static int Main(string[] args)
     {
@@ -17,14 +17,14 @@ internal static class Program
         Application.SetColorMode(SystemColorMode.System); // follow the Windows light/dark setting
 #pragma warning restore WFO5001
 
+        var setAll = args.Length > 1 && args[1] is "--unlock-all" or "--lock-all";
         uint appId = 0;
         if (args.Length > 0 &&
             uint.TryParse(args[0], NumberStyles.None, CultureInfo.InvariantCulture, out appId) == false)
-            return Fail("Could not parse application ID from command line argument.");
-        var unlockAll = args.Length > 1 && args[1] == "--unlock-all";
+            return Fail("Could not parse application ID from command line argument.", setAll);
 
         if (SteamLibrary.InstallPath == Application.StartupPath)
-            return Fail("This tool declines to being run from the Steam directory.");
+            return Fail("This tool declines to being run from the Steam directory.", setAll);
 
         SteamClient steam;
         try
@@ -33,11 +33,16 @@ internal static class Program
         }
         catch (ClientInitializeException e)
         {
+            if (setAll)
+                return Fail(e.Failure == ClientInitializeFailure.ConnectToGlobalUser
+                    ? "Steam couldn't open the game (is Family Sharing using it?)"
+                    : $"Steam isn't available ({e.Message})", true);
+
             var message = "Steam is not running. Please start Steam then run this tool again.";
             if (appId != 0 && e.Failure == ClientInitializeFailure.ConnectToGlobalUser)
                 message += "\n\nIf you have the game through Family Share, the game may be locked due to\n" +
                            "the Family Share account actively playing a game.";
-            return Fail(message + "\n\n(" + e.Message + ")");
+            return Fail(message + "\n\n(" + e.Message + ")", false);
         }
 
         using (steam)
@@ -45,21 +50,21 @@ internal static class Program
         {
             callbackTimer.Tick += (_, _) => steam.RunCallbacks();
 
-            if (appId == 0)
-            {
-                Application.Run(new GamePicker(steam));
-                return 0;
-            }
+            if (setAll) return UnlockAllRunner.Run(appId, steam, args[1] == "--unlock-all");
 
-            AchievementManager manager = new(appId, steam, unlockAll);
-            Application.Run(manager);
-            return unlockAll && manager.UnlockAllSucceeded == false ? 1 : 0;
+            Application.Run(appId == 0 ? new GamePicker(steam) : new AchievementManager(appId, steam));
+            return 0;
         }
     }
 
-    private static int Fail(string message)
+    // nothing is on screen yet, so this is the one place a message box is used;
+    // the silent unlock/lock-all mode reports to its parent through stderr instead
+    private static int Fail(string message, bool silent)
     {
-        Dialogs.Error(null, message);
+        if (silent)
+            Console.Error.WriteLine(message);
+        else
+            MessageBox.Show(message, "Steam Achievement Manager", MessageBoxButtons.OK, MessageBoxIcon.Error);
         return 1;
     }
 }

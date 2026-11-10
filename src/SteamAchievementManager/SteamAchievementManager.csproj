@@ -17,6 +17,8 @@
         <EnableWindowsTargeting>true</EnableWindowsTargeting>
         <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
         <ApplicationIcon>Assets\app.ico</ApplicationIcon>
+        <!-- the UI is built in code, not with the designer -->
+        <NoWarn>$(NoWarn);WFO1000</NoWarn>
     </PropertyGroup>
     <PropertyGroup>
         <!-- 32-bit: Steam's steamclient.dll is loaded in-process -->

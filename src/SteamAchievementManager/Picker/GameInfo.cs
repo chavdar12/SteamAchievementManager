@@ -9,9 +9,9 @@ internal sealed class GameInfo(uint id, string type, string name)
 
     public string Name { get; set => field = value ?? $"App {Id}"; } = name ?? $"App {id}";
 
-    public string ImageUrl { get; set; }
-    public int ImageIndex { get; set; }
+    public string LogoUrl { get; set; }
+    public Image Logo { get; set; }
 
-    // the virtual list item last created for this game
-    public ListViewItem Item { get; set; }
+    // ticked in the list
+    public bool Checked { get; set; }
 }

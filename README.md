@@ -12,9 +12,12 @@ Steam Achievement Manager (SAM) is a lightweight, portable application used to m
 
 - A single app: the game picker and the per-game manager are one `SteamAchievementManager.exe` (self-contained, no .NET install needed).
 - Targets .NET 10 instead of .NET Framework 4.8.
-- The game picker shows games as a list instead of tiles.
-- Multiple games can be selected (Ctrl/Shift+click or **Select All**) and opened together: pressing Enter or double-clicking opens one manager window per selected game.
-- **Unlock All Achievements** unlocks every achievement in all selected games in one click. Games are processed one at a time in the background; protected achievements are skipped. Can also be run from the command line: `SteamAchievementManager.exe <appid> --unlock-all`.
+- A modern Windows 11 style interface that follows the system light/dark mode: a flat toolbar with Fluent icons, card-style lists with game art and achievement icons, and progress at a glance.
+- Results, errors and confirmations appear in a message bar inside the window instead of popup dialogs.
+- Hovering or selecting a game shows **Unlock all** / **Lock all** quick actions for just that game.
+- Games are picked with checkboxes (click a box, press Space, or use **Select all**). **Open** opens one manager window per ticked game; Enter or double-click opens the highlighted row.
+- **Unlock all achievements** unlocks every achievement in all ticked games in one click. Games are processed one at a time in the background without opening any windows, with progress and a per-game failure report; protected achievements are skipped. Can also be run from the command line: `SteamAchievementManager.exe <appid> --unlock-all` (or `--lock-all`; prints the number changed; exit code 1 and the reason on stderr on failure).
+- Keyboard shortcuts: Ctrl+F search, F5 refresh, Ctrl+S save (in a game), Space toggles the selected rows.
 - Builds and releases are produced by GitHub Actions.
 
 ## Building
@@ -38,9 +41,9 @@ Project layout (`src/SteamAchievementManager/`):
 - `Steam/`: interop with Steam's native `steamclient.dll` (loading, the client connection and callbacks, and the apps and user-stats interfaces). The app is 32-bit because it loads Steam's 32-bit `steamclient.dll`.
 - `Schema/`: reads a game's achievement and stat definitions from Steam's binary KeyValues cache.
 - `Picker/`: the game list window.
-- `Manager/`: the per-game achievement and statistics window.
-- `Common/`: shared UI pieces (embedded images, dialogs, image downloads, list view).
-- `Assets/`: the app icon and toolbar images, embedded into the executable.
+- `Manager/`: the per-game achievement and statistics window, and the windowless unlock-all runner.
+- `Common/`: shared UI pieces (theme colors, Fluent icon glyphs, the toolbar renderer, the checkbox list, the message bar, image downloads).
+- `Assets/`: the app icon, embedded into the executable.
 
 Every push to `master` builds it and publishes a GitHub release.
 

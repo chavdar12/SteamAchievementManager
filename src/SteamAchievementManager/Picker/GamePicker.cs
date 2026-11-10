@@ -8,10 +8,11 @@ namespace SteamAchievementManager.Picker;
 
 // lists the owned games; each game is managed in its own process,
 // because Steam binds a process to a single app ID
-internal sealed partial class GamePicker : Form
+internal sealed class GamePicker : Form
 {
     private const string GameListUrl = "https://gib.me/sam/games.xml";
     private const uint DefaultGameId = 480; // Spacewar
+    private const int OpenWithoutAsking = 8;
 
     private readonly SteamClient _steam;
     private readonly Dictionary<uint, GameInfo> _games = [];
@@ -20,20 +21,139 @@ internal sealed partial class GamePicker : Form
     private readonly Queue<GameInfo> _logoQueue = new();
     private readonly HashSet<string> _logosQueued = [];
     private readonly HashSet<string> _logosAttempted = [];
+    private readonly Dictionary<string, Image> _logos = [];
     private bool _isDownloadingLogos;
+
+    private readonly ToolStripTextBox _searchBox;
+    private readonly ToolStripMenuItem _showGames, _showDemos, _showMods, _showJunk;
+    private readonly ToolStripButton _refreshButton, _openButton, _unlockButton;
+    private readonly ToolStripTextBox _addBox;
+    private readonly Ui.Header _header;
+    private readonly InfoBar _infoBar = new();
+    private readonly ModernList _list = new();
+    private readonly ToolStripStatusLabel _statusLabel = Ui.StatusLabel(true);
+    private readonly ToolStripStatusLabel _downloadLabel = Ui.StatusLabel(false);
+
+    private bool _isLoading;
+    private bool _isUnlocking;
+    private bool _stopUnlocking;
 
     public GamePicker(SteamClient steam)
     {
-        InitializeComponent();
-
-        Bitmap blank = new(_LogoImageList.ImageSize.Width, _LogoImageList.ImageSize.Height);
-        using (var g = Graphics.FromImage(blank)) g.Clear(Color.DimGray);
-        _LogoImageList.Images.Add("Blank", blank);
-
         _steam = steam;
-        _steam.OnCallback<AppDataChanged>(OnAppDataChanged);
 
+        Text = "Steam Achievement Manager";
+        Icon = Assets.App;
+        BackColor = Theme.Background;
+        ForeColor = Theme.Text;
+        StartPosition = FormStartPosition.CenterScreen;
+        ClientSize = new Size(LogicalToDeviceUnits(980), LogicalToDeviceUnits(660));
+        MinimumSize = new Size(LogicalToDeviceUnits(720), LogicalToDeviceUnits(440));
+        KeyPreview = true;
+
+        var toolbar = Ui.Toolbar(this);
+        _searchBox = Ui.SearchBox(this, "Search games", 200);
+        _searchBox.TextChanged += (_, _) => RefreshGames();
+        _searchBox.KeyDown += OnSearchKeyDown;
+
+        var filter = Ui.DropDown(this, "Show", Glyphs.Filter, "Choose which kinds of apps are listed");
+        _showGames = FilterItem("Games", true);
+        _showDemos = FilterItem("Demos", false);
+        _showMods = FilterItem("Mods", false);
+        _showJunk = FilterItem("Other apps", false);
+        filter.DropDownItems.AddRange([_showGames, _showDemos, _showMods, _showJunk]);
+
+        _addBox = Ui.SearchBox(this, "App ID", 70);
+        _addBox.KeyDown += (_, e) =>
+        {
+            if (e.KeyCode != Keys.Enter) return;
+            e.SuppressKeyPress = true;
+            OnAddGame(null, EventArgs.Empty);
+        };
+
+        _unlockButton = Ui.Button(this, "Unlock all achievements", Glyphs.Unlock, OnUnlockAllClicked,
+            "Unlock every achievement in the ticked games", primary: true);
+        _openButton = Ui.Button(this, "Open", Glyphs.Open, OnOpenClicked, "Manage the ticked games one by one");
+        _refreshButton = Ui.Button(this, "Refresh", Glyphs.Refresh, (_, _) => LoadGames(),
+            "Reload the game list (F5)", iconOnly: true);
+        foreach (var item in new ToolStripItem[] { _unlockButton, _openButton, _refreshButton })
+            item.Alignment = ToolStripItemAlignment.Right;
+
+        toolbar.Items.AddRange([
+            Ui.Icon(this, Glyphs.Search), _searchBox, filter,
+            Ui.Separator(this),
+            Ui.Button(this, "Select all", Glyphs.SelectAll, OnSelectAll, "Tick every listed game"),
+            Ui.Button(this, "Clear", Glyphs.ClearSelection, OnClearSelection, "Untick all games"),
+            Ui.Separator(this),
+            _addBox, Ui.Button(this, "Add", Glyphs.Add, OnAddGame, "Show only the game with this app ID"),
+            _unlockButton, _openButton, _refreshButton
+        ]);
+
+        _header = new Ui.Header(this) { Title = { Text = "Your games" } };
+
+        _list.Dock = DockStyle.Fill;
+        _list.RowHeight = LogicalToDeviceUnits(76);
+        _list.IsChecked = i => _filteredGames[i].Checked;
+        _list.ToggleRequested += OnToggleGames;
+        _list.RowClick = OnRowClick;
+        _list.PaintRow += OnPaintGameRow;
+        _list.RetrieveVirtualItem += OnRetrieveVirtualItem;
+        _list.SearchForVirtualItem += OnSearchForVirtualItem;
+        _list.ItemActivate += OnActivateGame;
+        _list.SelectedIndexChanged += (_, _) => UpdateSummary();
+        _list.VirtualItemsSelectionRangeChanged += (_, _) => UpdateSummary();
+
+        _downloadLabel.Image = Glyphs.Image(Glyphs.Download, LogicalToDeviceUnits(14), Theme.SubtleText);
+        _downloadLabel.Visible = false;
+
+        // docking runs from the last added control inwards
+        Controls.Add(_list);
+        Controls.Add(_infoBar);
+        Controls.Add(_header);
+        Controls.Add(toolbar);
+        Controls.Add(Ui.StatusBar(this, _statusLabel, _downloadLabel));
+
+        _steam.OnCallback<AppDataChanged>(OnAppDataChanged);
         LoadGames();
+    }
+
+    private ToolStripMenuItem FilterItem(string text, bool isChecked)
+    {
+        ToolStripMenuItem item = new(text) { CheckOnClick = true, Checked = isChecked };
+        item.CheckedChanged += (_, _) => RefreshGames();
+        return item;
+    }
+
+    protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+    {
+        switch (keyData)
+        {
+            case Keys.Control | Keys.F:
+                _searchBox.Focus();
+                _searchBox.SelectAll();
+                return true;
+            case Keys.F5:
+                if (_refreshButton.Enabled) LoadGames();
+                return true;
+            case Keys.Control | Keys.A when _list.Focused:
+                _list.SelectAllRows();
+                return true;
+        }
+
+        return base.ProcessCmdKey(ref msg, keyData);
+    }
+
+    private void OnSearchKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.KeyCode is not (Keys.Down or Keys.Enter) || _filteredGames.Count == 0) return;
+
+        e.SuppressKeyPress = true;
+        _list.Focus();
+        if (_list.SelectedIndices.Count == 0)
+        {
+            _list.SelectedIndices.Add(0);
+            _list.FocusedItem = _list.Items[0];
+        }
     }
 
     private void OnAppDataChanged(AppDataChanged param)
@@ -41,20 +161,27 @@ internal sealed partial class GamePicker : Form
         if (param.Result == false || _games.TryGetValue(param.AppId, out var game) == false) return;
 
         game.Name = _steam.Apps.GetAppData(game.Id, "name");
+        game.LogoUrl = null;
         QueueLogo(game);
         DownloadLogos();
+        _list.Invalidate();
     }
 
     private async void LoadGames()
     {
         _games.Clear();
-        _RefreshGamesButton.Enabled = false;
+        _addBox.Text = "";
+        _isLoading = true;
+        UpdateCommands();
+        _filteredGames.Clear();
+        _list.SetCount(0);
+        _list.EmptyText = "Loading your games…";
         try
         {
-            _PickerStatusLabel.Text = "Downloading game list...";
+            _statusLabel.Text = "Downloading game list…";
             var list = await Http.Client.GetByteArrayAsync(GameListUrl);
 
-            _PickerStatusLabel.Text = "Checking game ownership...";
+            _statusLabel.Text = "Checking which games you own…";
             var owned = await Task.Run(() => ParseGameList(list).Select(g => TryGetOwnedGame(g.Id, g.Type))
                 .Where(g => g != null).ToList());
             foreach (var game in owned) _games.TryAdd(game.Id, game);
@@ -62,11 +189,17 @@ internal sealed partial class GamePicker : Form
         catch (Exception e)
         {
             AddGame(DefaultGameId, "normal");
-            Dialogs.Error(this, e.ToString());
+            _infoBar.Show(Severity.Error, $"Couldn't download the game list: {e.Message}",
+                [new InfoAction("Try again", LoadGames)], e.ToString());
         }
 
+        if (IsDisposed) return;
+
+        _isLoading = false;
+        _statusLabel.Text = "";
+        _list.EmptyText = "No games match your search.";
         RefreshGames();
-        _RefreshGamesButton.Enabled = true;
+        UpdateCommands();
         DownloadLogos();
     }
 
@@ -93,137 +226,250 @@ internal sealed partial class GamePicker : Form
 
     private void RefreshGames()
     {
-        var search = _SearchGameTextBox.Text;
+        if (_isLoading) return;
+
+        var search = _searchBox.Text.Trim();
         var wantedTypes = new Dictionary<string, bool>
         {
-            ["normal"] = _FilterGamesMenuItem.Checked,
-            ["demo"] = _FilterDemosMenuItem.Checked,
-            ["mod"] = _FilterModsMenuItem.Checked,
-            ["junk"] = _FilterJunkMenuItem.Checked
+            ["normal"] = _showGames.Checked,
+            ["demo"] = _showDemos.Checked,
+            ["mod"] = _showMods.Checked,
+            ["junk"] = _showJunk.Checked
         };
 
         _filteredGames.Clear();
         _filteredGames.AddRange(_games.Values
-            .Where(g => g.Name.Contains(search, StringComparison.OrdinalIgnoreCase))
+            .Where(g => g.Name.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                        g.Id.ToString().Equals(search, StringComparison.Ordinal))
             .Where(g => wantedTypes.GetValueOrDefault(g.Type, true))
-            .OrderBy(g => g.Name));
+            .OrderBy(g => g.Name, StringComparer.CurrentCultureIgnoreCase));
 
-        _GameListView.VirtualListSize = _filteredGames.Count;
-        _PickerStatusLabel.Text = $"Displaying {_filteredGames.Count} games. Total {_games.Count} games.";
-
-        if (_filteredGames.Count > 0)
-        {
-            _GameListView.Items[0].Selected = true;
-            _GameListView.Select();
-        }
+        _list.SetCount(_filteredGames.Count);
+        UpdateSummary();
     }
 
-    private void OnGameListViewRetrieveVirtualItem(object sender, RetrieveVirtualItemEventArgs e)
+    // games ticked in the list, or the highlighted rows if nothing is ticked
+    private List<GameInfo> TargetGames()
+    {
+        var ticked = _games.Values.Where(g => g.Checked).OrderBy(g => g.Name).ToList();
+        return ticked.Count > 0 ? ticked : HighlightedGames();
+    }
+
+    private List<GameInfo> HighlightedGames() =>
+        _list.SelectedIndices.Cast<int>().Where(i => i >= 0 && i < _filteredGames.Count)
+            .Select(i => _filteredGames[i]).ToList();
+
+    private void UpdateSummary()
+    {
+        if (_isLoading)
+        {
+            _header.Subtitle.Text = "Loading…";
+            return;
+        }
+
+        var ticked = _games.Values.Count(g => g.Checked);
+        var shown = _filteredGames.Count == _games.Count
+            ? Plural(_games.Count, "game")
+            : $"{_filteredGames.Count} of {Plural(_games.Count, "game")} shown";
+        _header.Subtitle.Text = ticked > 0 ? $"{shown}  ·  {ticked} selected" : shown;
+        UpdateCommands();
+    }
+
+    private void UpdateCommands()
+    {
+        var hasTargets = _isLoading == false && (_games.Values.Any(g => g.Checked) || _list.SelectedIndices.Count > 0);
+        _refreshButton.Enabled = _isLoading == false && _isUnlocking == false;
+        _openButton.Enabled = hasTargets;
+        _unlockButton.Enabled = hasTargets && _isUnlocking == false;
+
+        var count = TargetCountText();
+        _unlockButton.Text = count == null ? "Unlock all achievements" : $"Unlock all achievements ({count})";
+    }
+
+    private string TargetCountText()
+    {
+        var ticked = _games.Values.Count(g => g.Checked);
+        return ticked > 1 ? ticked.ToString() : null;
+    }
+
+    private static string Plural(int count, string word) => count == 1 ? $"1 {word}" : $"{count:N0} {word}s";
+
+    private void OnToggleGames(IReadOnlyList<int> indices)
+    {
+        var games = indices.Where(i => i < _filteredGames.Count).Select(i => _filteredGames[i]).ToList();
+        var value = games.Any(g => g.Checked == false);
+        foreach (var game in games) game.Checked = value;
+        UpdateSummary();
+    }
+
+    private void OnSelectAll(object sender, EventArgs e)
+    {
+        foreach (var game in _filteredGames) game.Checked = true;
+        _list.Invalidate();
+        UpdateSummary();
+    }
+
+    private void OnClearSelection(object sender, EventArgs e)
+    {
+        foreach (var game in _games.Values) game.Checked = false;
+        _list.SelectedIndices.Clear();
+        _list.Invalidate();
+        UpdateSummary();
+    }
+
+    private void OnRetrieveVirtualItem(object sender, RetrieveVirtualItemEventArgs e)
     {
         var game = _filteredGames[e.ItemIndex];
-        e.Item = game.Item = new ListViewItem { Text = game.Name, ImageIndex = game.ImageIndex };
+        e.Item = new ListViewItem(game.Name) { ToolTipText = $"{game.Name} (app {game.Id})" };
     }
 
     // type-ahead: find the next game whose name starts with the typed text
-    private void OnGameListViewSearchForVirtualItem(object sender, SearchForVirtualItemEventArgs e)
+    private void OnSearchForVirtualItem(object sender, SearchForVirtualItemEventArgs e)
     {
         if (e.Direction != SearchDirectionHint.Down || e.IsTextSearch == false) return;
 
         var count = _filteredGames.Count;
         if (count < 2) return;
 
-        var start = e.StartIndex;
+        var start = Math.Clamp(e.StartIndex, 0, count);
         Predicate<GameInfo> matches = g => g.Name.StartsWith(e.Text, StringComparison.CurrentCultureIgnoreCase);
-
-        int index;
-        if (start >= count)
-        {
-            index = _filteredGames.FindIndex(0, start - 1, matches);
-        }
-        else if (start <= 0)
-        {
-            index = _filteredGames.FindIndex(0, count, matches);
-        }
-        else
-        {
-            index = _filteredGames.FindIndex(start, count - start, matches);
-            if (index < 0) index = _filteredGames.FindIndex(0, start - 1, matches);
-        }
-
+        var index = _filteredGames.FindIndex(start, count - start, matches);
+        if (index < 0) index = _filteredGames.FindIndex(0, start, matches);
         e.Index = index;
     }
 
-    private void OnGameListViewDrawItem(object sender, DrawListViewItemEventArgs e)
+    private void OnPaintGameRow(object sender, RowPaintEventArgs e)
     {
-        e.DrawDefault = true;
+        var game = _filteredGames[e.Index];
+        var g = e.Graphics;
+        var bounds = e.Bounds;
 
-        if (e.Item.Bounds.IntersectsWith(_GameListView.ClientRectangle) == false) return;
-
-        var game = _filteredGames[e.ItemIndex];
-        if (game.ImageIndex <= 0)
+        // Steam's small capsule art is 184x69
+        var logoHeight = bounds.Height - LogicalToDeviceUnits(20);
+        Rectangle logo = new(bounds.X, bounds.Y + (bounds.Height - logoHeight) / 2, logoHeight * 184 / 69, logoHeight);
+        var radius = LogicalToDeviceUnits(4);
+        if (game.Logo != null)
         {
-            QueueLogo(game);
-            DownloadLogos();
+            Theme.DrawRoundedImage(g, game.Logo, logo, radius);
         }
+        else
+        {
+            Theme.FillRounded(g, Theme.Placeholder, logo, radius);
+            Glyphs.Draw(g, Glyphs.Game, logo, Theme.DisabledText, LogicalToDeviceUnits(22));
+            QueueLogo(game);
+            BeginInvoke(new Action(DownloadLogos));
+        }
+
+        // quick actions for this game, shown while the row is hovered or selected
+        var textRight = bounds.Right;
+        if (e.IsSelected || e.Index == _list.HotIndex)
+        {
+            var (unlock, lockAll) = QuickActionBounds(bounds);
+            DrawQuickAction(g, unlock, "Unlock all", Glyphs.Unlock);
+            DrawQuickAction(g, lockAll, "Lock all", Glyphs.Lock);
+            textRight = unlock.Left - LogicalToDeviceUnits(12);
+        }
+
+        var left = logo.Right + LogicalToDeviceUnits(16);
+        var nameHeight = TextRenderer.MeasureText(g, "Ag", Theme.RowTitleFont).Height;
+        var detailHeight = TextRenderer.MeasureText(g, "Ag", Theme.SmallFont).Height;
+        var top = bounds.Y + (bounds.Height - nameHeight - detailHeight - LogicalToDeviceUnits(2)) / 2;
+        const TextFormatFlags flags = TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis |
+                                      TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding;
+
+        TextRenderer.DrawText(g, game.Name, Theme.RowTitleFont,
+            Rectangle.FromLTRB(left, top, textRight, top + nameHeight), Theme.Text, flags);
+
+        var detail = $"App ID {game.Id}";
+        if (game.Type != "normal") detail += "  ·  " + (game.Type == "junk" ? "Other" : Capitalize(game.Type));
+        TextRenderer.DrawText(g, detail, Theme.SmallFont,
+            Rectangle.FromLTRB(left, top + nameHeight + LogicalToDeviceUnits(2), textRight, bounds.Bottom),
+            Theme.SubtleText, flags);
     }
 
-    private void OnGameListViewDrawSubItem(object sender, DrawListViewSubItemEventArgs e)
+    private (Rectangle Unlock, Rectangle Lock) QuickActionBounds(Rectangle content)
     {
-        e.DrawDefault = true;
+        var height = LogicalToDeviceUnits(30);
+        var y = content.Y + (content.Height - height) / 2;
+        Rectangle lockAll = new(content.Right - LogicalToDeviceUnits(92), y, LogicalToDeviceUnits(92), height);
+        Rectangle unlock = new(lockAll.Left - LogicalToDeviceUnits(108), y, LogicalToDeviceUnits(102), height);
+        return (unlock, lockAll);
     }
 
-    private void OnGameListViewResize(object sender, EventArgs e)
+    private void DrawQuickAction(Graphics g, Rectangle r, string text, char glyph)
     {
-        if (_GameListView.Columns.Count > 0) _GameListView.Columns[0].Width = _GameListView.ClientSize.Width;
+        var hot = r.Contains(_list.PointToClient(MousePosition));
+        RectangleF shape = new(r.X + 0.5f, r.Y + 0.5f, r.Width - 1, r.Height - 1);
+        var radius = LogicalToDeviceUnits(4);
+        Theme.FillRounded(g, hot ? Theme.ControlHover : Theme.Surface, shape, radius);
+        Theme.DrawRounded(g, Theme.Border, shape, radius);
+
+        var icon = LogicalToDeviceUnits(14);
+        var pad = LogicalToDeviceUnits(10);
+        Glyphs.Draw(g, glyph, new RectangleF(r.X + pad, r.Y + (r.Height - icon) / 2f, icon, icon), Theme.Text);
+        TextRenderer.DrawText(g, text, Font, Rectangle.FromLTRB(r.X + pad + icon + LogicalToDeviceUnits(6), r.Y, r.Right, r.Bottom),
+            Theme.Text, TextFormatFlags.SingleLine | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
     }
+
+    private bool OnRowClick(int index, Point point)
+    {
+        var (unlock, lockAll) = QuickActionBounds(_list.ContentBounds(index));
+        var isUnlock = unlock.Contains(point);
+        if (isUnlock == false && lockAll.Contains(point) == false) return false;
+
+        ConfirmSetAll([_filteredGames[index]], isUnlock);
+        return true;
+    }
+
+    private static string Capitalize(string text) => text.Length == 0 ? text : char.ToUpper(text[0]) + text[1..];
 
     private void QueueLogo(GameInfo game)
     {
-        if (game.ImageIndex > 0) return;
+        if (game.Logo != null) return;
 
-        game.ImageUrl = GetLogoUrl(game.Id);
-        if (game.ImageUrl == null) return;
+        game.LogoUrl ??= GetLogoUrl(game.Id);
+        if (game.LogoUrl == null) return;
 
-        var cached = _LogoImageList.Images.IndexOfKey(game.ImageUrl);
-        if (cached >= 0)
-            game.ImageIndex = cached;
-        else if (_logosAttempted.Contains(game.ImageUrl) == false && _logosQueued.Add(game.ImageUrl))
+        if (_logos.TryGetValue(game.LogoUrl, out var cached))
+            game.Logo = cached;
+        else if (_logosAttempted.Contains(game.LogoUrl) == false && _logosQueued.Add(game.LogoUrl))
             _logoQueue.Enqueue(game);
     }
 
     // downloads queued logos one at a time, skipping games that scrolled out of view
     private async void DownloadLogos()
     {
-        if (_isDownloadingLogos) return;
+        if (_isDownloadingLogos || IsDisposed) return;
 
         _isDownloadingLogos = true;
         while (_logoQueue.TryDequeue(out var game))
         {
-            _logosQueued.Remove(game.ImageUrl);
+            _logosQueued.Remove(game.LogoUrl);
             if (IsShown(game) == false) continue;
 
-            _DownloadStatusLabel.Text = $"Downloading {1 + _logoQueue.Count} game icons...";
-            _DownloadStatusLabel.Visible = true;
+            _downloadLabel.Text = $"Downloading {1 + _logoQueue.Count} game images…";
+            _downloadLabel.Visible = true;
 
-            _logosAttempted.Add(game.ImageUrl);
-            var logo = await Http.TryGetImageAsync(game.ImageUrl);
+            var url = game.LogoUrl;
+            _logosAttempted.Add(url);
+            var logo = await Http.TryGetImageAsync(url);
             if (IsDisposed) return;
             if (logo == null) continue;
 
-            _GameListView.BeginUpdate();
-            game.ImageIndex = _LogoImageList.Images.Count;
-            _LogoImageList.Images.Add(game.ImageUrl, logo);
-            _GameListView.EndUpdate();
+            _logos[url] = logo;
+            foreach (var other in _filteredGames.Where(g => g.LogoUrl == url)) other.Logo = logo;
+            _list.InvalidateRow(_filteredGames.IndexOf(game));
         }
 
-        _DownloadStatusLabel.Visible = false;
+        _downloadLabel.Visible = false;
         _isDownloadingLogos = false;
     }
 
-    private bool IsShown(GameInfo game) =>
-        game.Item != null &&
-        _filteredGames.Contains(game) &&
-        game.Item.Bounds.IntersectsWith(_GameListView.ClientRectangle);
+    private bool IsShown(GameInfo game)
+    {
+        var index = _filteredGames.IndexOf(game);
+        return index >= 0 && _list.GetItemRect(index).IntersectsWith(_list.ClientRectangle);
+    }
 
     // the small capsule in the current language, then in English, then the old community logo
     private string GetLogoUrl(uint id)
@@ -242,42 +488,47 @@ internal sealed partial class GamePicker : Form
             : $"https://cdn.steamstatic.com/steamcommunity/public/images/apps/{id}/{logo}.jpg";
     }
 
-    private List<GameInfo> SelectedGames =>
-        _GameListView.SelectedIndices.Cast<int>().Where(i => i >= 0 && i < _filteredGames.Count)
-            .Select(i => _filteredGames[i]).ToList();
+    private static Process StartManager(uint appId) => Process.Start(Environment.ProcessPath!, $"{appId}");
 
-    private static Process StartManager(uint appId, bool unlockAll) =>
-        Process.Start(Environment.ProcessPath!, unlockAll ? $"{appId} --unlock-all" : $"{appId}");
+    // double-click or Enter opens the highlighted rows
+    private void OnActivateGame(object sender, EventArgs e) => OpenGames(HighlightedGames());
 
-    private void OnActivateGame(object sender, EventArgs e)
+    private void OnOpenClicked(object sender, EventArgs e)
+    {
+        var games = TargetGames();
+        if (games.Count <= OpenWithoutAsking)
+        {
+            OpenGames(games);
+            return;
+        }
+
+        _infoBar.Show(Severity.Warning, $"Open {games.Count} windows, one for each selected game?",
+            [new InfoAction($"Open {games.Count} windows", () => OpenGames(games)), new InfoAction("Cancel", null)]);
+    }
+
+    private void OpenGames(List<GameInfo> games)
     {
         try
         {
-            foreach (var game in SelectedGames) StartManager(game.Id, false)?.Dispose();
+            foreach (var game in games) StartManager(game.Id)?.Dispose();
         }
-        catch (Win32Exception)
+        catch (Win32Exception e)
         {
-            Dialogs.Error(this, "Failed to start the game manager.");
+            _infoBar.Show(Severity.Error, $"Couldn't start the achievement manager: {e.Message}");
         }
-    }
-
-    private void OnRefresh(object sender, EventArgs e)
-    {
-        _AddGameTextBox.Text = "";
-        LoadGames();
     }
 
     private void OnAddGame(object sender, EventArgs e)
     {
-        if (uint.TryParse(_AddGameTextBox.Text, out var id) == false)
+        if (uint.TryParse(_addBox.Text.Trim(), out var id) == false)
         {
-            Dialogs.Error(this, "Please enter a valid game ID.");
+            _infoBar.Show(Severity.Error, "Enter a numeric app ID, for example 480.");
             return;
         }
 
         if (_steam.Apps.IsSubscribedApp(id) == false)
         {
-            Dialogs.Error(this, "You don't own that game.");
+            _infoBar.Show(Severity.Warning, $"App {id} isn't in your Steam library.");
             return;
         }
 
@@ -285,81 +536,153 @@ internal sealed partial class GamePicker : Form
         _logoQueue.Clear();
         _logosQueued.Clear();
 
-        _AddGameTextBox.Text = "";
+        _addBox.Text = "";
+        _searchBox.Text = "";
         _games.Clear();
         AddGame(id, "normal");
-        _FilterGamesMenuItem.Checked = true;
+        _showGames.Checked = true;
         RefreshGames();
-        DownloadLogos();
+        _infoBar.Show(Severity.Info, $"Showing only app {id}. Refresh to see all your games again.",
+            [new InfoAction("Show all games", LoadGames)]);
     }
 
-    private void OnFilterUpdate(object sender, EventArgs e)
+    private void OnUnlockAllClicked(object sender, EventArgs e)
     {
-        RefreshGames();
-
-        // keep focus in the search box; the list view's type-ahead search would take it on KeyUp
-        _SearchGameTextBox.Focus();
-    }
-
-    private void OnSelectAll(object sender, EventArgs e)
-    {
-        _GameListView.SelectAll();
-        _GameListView.Select();
-    }
-
-    private async void OnUnlockAllSelected(object sender, EventArgs e)
-    {
-        var games = SelectedGames;
-        if (games.Count == 0) return;
-
-        if (Dialogs.Confirm(this,
-                $"Unlock every achievement in {games.Count} game(s)?\n\n" +
-                "This is visible on your Steam profile. Protected achievements are skipped.",
-                "Unlock All Achievements") == false)
+        var games = TargetGames();
+        if (games.Count == 0)
+        {
+            _infoBar.Show(Severity.Info, "Tick the games you want to complete first.");
             return;
+        }
 
-        _UnlockAllButton.Enabled = false;
-        List<string> failed = [];
+        ConfirmSetAll(games, true);
+    }
+
+    private void ConfirmSetAll(List<GameInfo> games, bool unlock)
+    {
+        if (_isUnlocking)
+        {
+            _infoBar.Show(Severity.Info, "Wait for the current run to finish, or stop it first.");
+            return;
+        }
+
+        var verb = unlock ? "Unlock" : "Lock";
+        var what = games.Count == 1 ? $"\"{games[0].Name}\"" : $"{games.Count} games";
+        _infoBar.Show(Severity.Warning, unlock
+                ? $"Unlock every achievement in {what}? This shows on your Steam profile; protected achievements are skipped."
+                : $"Lock every achievement in {what}? This removes them from your Steam profile; protected achievements are skipped.",
+            [new InfoAction($"{verb} all", () => SetAll(games, unlock)), new InfoAction("Cancel", null)]);
+    }
+
+    private async void SetAll(List<GameInfo> games, bool unlock)
+    {
+        var verb = unlock ? "Unlock" : "Lock";
+        _isUnlocking = true;
+        _stopUnlocking = false;
+        UpdateCommands();
+        _header.Progress.Value = 0;
+        _header.Progress.Visible = true;
+
+        List<(GameInfo Game, string Error)> failures = [];
+        string startError = null;
+        var unlocked = 0;
+        var done = 0;
         try
         {
-            for (var i = 0; i < games.Count; i++)
+            foreach (var game in games)
             {
-                _PickerStatusLabel.Text = $"Unlocking {i + 1}/{games.Count}: {games[i].Name}";
-                var appId = games[i].Id;
-                if (await Task.Run(() => RunUnlockAll(appId)) == false) failed.Add(games[i].Name);
+                if (_stopUnlocking) break;
+
+                _infoBar.Show(Severity.Info, $"{verb}ing {done + 1} of {games.Count}: {game.Name}…",
+                    [new InfoAction("Stop", StopUnlocking)]);
+                _statusLabel.Text = $"{verb}ing achievements in {game.Name}…";
+
+                var (count, error) = await RunSetAll(game.Id, unlock);
+                if (IsDisposed) return;
+
+                if (error == null) unlocked += count;
+                else failures.Add((game, error));
+
+                done++;
+                _header.Progress.Value = (float)done / games.Count;
             }
         }
-        catch (Win32Exception)
+        catch (Win32Exception e)
         {
-            Dialogs.Error(this, "Failed to start the game manager.");
-            return;
+            startError = $"Couldn't start the achievement manager: {e.Message}";
         }
         finally
         {
-            _UnlockAllButton.Enabled = true;
+            _isUnlocking = false;
+            _header.Progress.Visible = false;
+            _statusLabel.Text = "";
+            UpdateCommands();
         }
 
-        var succeeded = games.Count - failed.Count;
-        _PickerStatusLabel.Text = $"Unlocked {succeeded}/{games.Count} games.";
-        if (failed.Count == 0)
-            Dialogs.Info(this, $"Done: {games.Count} game(s) processed.", "Unlock All Achievements");
-        else
-            Dialogs.Warning(this,
-                $"Done: {succeeded}/{games.Count} succeeded. Failed:\n" + string.Join("\n", failed.Take(30)),
-                "Unlock All Achievements");
+        if (startError != null)
+        {
+            _infoBar.Show(Severity.Error, startError);
+            return;
+        }
+
+        var achievements = Plural(unlocked, "achievement");
+        var stopped = done < games.Count ? $"Stopped after {done} of {games.Count} games. " : "";
+        if (failures.Count == 0)
+        {
+            _infoBar.Show(Severity.Success, unlocked == 0
+                ? $"{stopped}Nothing to {verb.ToLowerInvariant()} — every achievement that can change already is {verb.ToLowerInvariant()}ed."
+                : $"{stopped}{verb}ed {achievements} in {Plural(done, "game")}.");
+            return;
+        }
+
+        var succeeded = done - failures.Count;
+        var details = failures.Select(f => $"{f.Game.Name}: {f.Error}").ToList();
+        var shown = string.Join(";  ", details.Take(2));
+        if (failures.Count > 2) shown += $"; and {failures.Count - 2} more";
+        _infoBar.Show(Severity.Warning,
+            $"{stopped}{verb}ed {achievements} in {succeeded} of {Plural(done, "game")}. Failed — {shown}",
+            [new InfoAction("Retry failed", () => SetAll(failures.Select(f => f.Game).ToList(), unlock))],
+            "Failed:\n" + string.Join("\n", details.Take(40)));
     }
 
-    private static bool RunUnlockAll(uint appId)
+    private void StopUnlocking()
     {
-        using var process = StartManager(appId, true);
+        _stopUnlocking = true;
+        _infoBar.Show(Severity.Info, "Stopping after the current game…");
+    }
 
-        // a game whose stats never arrive is killed after 60s and counted as failed
-        if (process.WaitForExit(60000) == false)
+    // runs "<exe> <appId> --unlock-all|--lock-all" without a window; it prints the number of changed
+    // achievements, or the reason it failed on stderr with a non-zero exit code
+    private static async Task<(int Count, string Error)> RunSetAll(uint appId, bool unlock)
+    {
+        using Process process = new();
+        process.StartInfo = new ProcessStartInfo(Environment.ProcessPath!,
+            $"{appId} {(unlock ? "--unlock-all" : "--lock-all")}")
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+        process.Start();
+        var output = process.StandardOutput.ReadToEndAsync();
+        var error = process.StandardError.ReadToEndAsync();
+
+        // a game whose stats never arrive is stopped and counted as failed
+        using CancellationTokenSource timeout = new(TimeSpan.FromSeconds(60));
+        try
+        {
+            await process.WaitForExitAsync(timeout.Token);
+        }
+        catch (OperationCanceledException)
         {
             process.Kill();
-            return false;
+            return (0, "Steam didn't respond in time");
         }
 
-        return process.ExitCode == 0;
+        var message = (await error).Trim();
+        if (process.ExitCode != 0) return (0, message.Length > 0 ? message : $"failed with code {process.ExitCode}");
+
+        return (int.TryParse((await output).Trim(), out var count) ? count : 0, null);
     }
 }
