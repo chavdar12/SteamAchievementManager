@@ -37,18 +37,16 @@ jobs:
 
       - name: Package
         shell: pwsh
-        run: |
-          Copy-Item LICENSE.txt, README.md publish/
-          Compress-Archive -Path publish/SteamAchievementManager.exe, publish/LICENSE.txt, publish/README.md -DestinationPath "SteamAchievementManager-$env:VERSION.zip"
+        run: Copy-Item publish/SteamAchievementManager.exe "SteamAchievementManager-$env:VERSION.exe"
 
       - uses: actions/upload-artifact@v4
         with:
           name: SteamAchievementManager-${{ env.VERSION }}
-          path: SteamAchievementManager-*.zip
+          path: SteamAchievementManager-*.exe
 
       - name: Release
         # master pushes get an auto tag v7.0.<run number>; a pushed v* tag is used as-is
         if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "v${{ env.VERSION }}" SteamAchievementManager-${{ env.VERSION }}.zip --target "${{ github.sha }}" --generate-notes --title "v${{ env.VERSION }}"
+        run: gh release create "v${{ env.VERSION }}" SteamAchievementManager-${{ env.VERSION }}.exe --target "${{ github.sha }}" --generate-notes --title "v${{ env.VERSION }}"
