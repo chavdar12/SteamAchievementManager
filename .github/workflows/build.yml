@@ -2,7 +2,7 @@ name: Build
 
 on:
   push:
-    branches: [master]
+    branches: [master, dev]
     tags: ['v*']
   pull_request:
   workflow_dispatch:
@@ -50,4 +50,10 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "v${{ env.VERSION }}" SteamAchievementManager-${{ env.VERSION }}.exe --target "${{ github.sha }}" --generate-notes --title "v${{ env.VERSION }}"
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then  # releases only come from master
+            status=$(gh api "repos/$GITHUB_REPOSITORY/compare/master...$GITHUB_SHA" -q .status)
+            [[ $status == behind || $status == identical ]] || { echo "::error::$GITHUB_REF_NAME is not on master"; exit 1; }
+          fi
+          gh release create "v${{ env.VERSION }}" SteamAchievementManager-${{ env.VERSION }}.exe --target "${{ github.sha }}" --generate-notes --title "v${{ env.VERSION }}"
